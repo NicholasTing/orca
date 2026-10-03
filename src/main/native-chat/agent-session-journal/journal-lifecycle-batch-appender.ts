@@ -1,8 +1,13 @@
 import type { AgentJournalCursor } from '../../../shared/agent-session-journal-types'
 import type { JournalReducerState } from './journal-reducer'
+import { partitionJournalLifecycleMutations } from './journal-lifecycle-batch-partition'
 import { journalLifecycleBatchRowBuilder } from './journal-row-builders'
-import type { JournalLifecycleBatchInput } from './journal-store-contracts'
+import type {
+  JournalLifecycleBatchInput,
+  JournalResolvedLifecycleBatchInput
+} from './journal-store-contracts'
 import type { JournalRow } from './journal-row-schema'
+import type { JournalRowWriter } from './journal-row-writer'
 
 const SETTLEMENT_ALREADY_APPLIED = new Error('journal_settlement_already_applied')
 
@@ -12,6 +17,7 @@ export class JournalLifecycleBatchAppender {
       state: () => JournalReducerState
       cursor: () => AgentJournalCursor
       enqueue: (build: (seq: number, ts: number) => JournalRow) => Promise<JournalRow>
+      enqueueEach: JournalRowWriter['enqueueEach']
     }
   ) {}
 
@@ -38,6 +44,28 @@ export class JournalLifecycleBatchAppender {
           return this.deps.cursor()
         }
         throw error
+      })
+  }
+
+  /** Chooses the mutations at its turn in the queue; one too large for a row becomes consecutive
+   *  rows that nothing else lands between, in the order resolved. */
+  appendResolved(input: JournalResolvedLifecycleBatchInput): Promise<AgentJournalCursor | null> {
+    return this.deps
+      .enqueueEach(() =>
+        partitionJournalLifecycleMutations(input.settlementId, input.resolve())
+          .filter((chunk) => !this.wasApplied(chunk.settlementId))
+          .map((chunk) =>
+            journalLifecycleBatchRowBuilder(
+              this.deps.state,
+              chunk.settlementId,
+              chunk.mutations,
+              input
+            )
+          )
+      )
+      .then((rows) => {
+        const last = rows.at(-1)
+        return last ? { epoch: last.epoch, sequence: last.seq } : null
       })
   }
 

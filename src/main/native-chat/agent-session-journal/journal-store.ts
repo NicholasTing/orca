@@ -331,6 +331,11 @@ export class AgentSessionJournal {
     return this.lifecycleBatchAppender.append(input)
   }
 
+  /** A lifecycle batch whose mutations are chosen from the fold at its own turn in the queue;
+   *  null when none are. */
+  appendResolvedLifecycleBatch: JournalLifecycleBatchAppender['appendResolved'] = (input) =>
+    this.lifecycleBatchAppender.appendResolved(input)
+
   /**
    * Write-ahead submission row. It is durable before the caller dispatches
    * anything, and it doubles as the optimistic user bubble so an accepted echo

@@ -72,6 +72,11 @@ export type JournalLifecycleBatchInput = {
   recovered?: true
 }
 
+export type JournalResolvedLifecycleBatchInput = Omit<JournalLifecycleBatchInput, 'mutations'> & {
+  /** Read from the fold with every earlier write landed; may return none. */
+  resolve: () => readonly JournalLifecycleMutationInput[]
+}
+
 export type JournalSubmissionInput = {
   clientMessageId: string
   payloadFingerprint: string
