@@ -62,7 +62,13 @@ async function startOrcaServe(exePath, userDataDir) {
     exePath,
     [cli, 'serve', '--json', '--port', '0', '--pairing-address', '127.0.0.1'],
     {
-      env: { ...process.env, ELECTRON_RUN_AS_NODE: '1', ORCA_USER_DATA_PATH: userDataDir },
+      // orcad is opt-in on Windows until Electron serve can adopt a daemon orcad forked.
+      env: {
+        ...process.env,
+        ELECTRON_RUN_AS_NODE: '1',
+        ORCA_SERVE_RUNTIME: 'orcad',
+        ORCA_USER_DATA_PATH: userDataDir
+      },
       windowsHide: true
     }
   )
