@@ -29,7 +29,8 @@ import type {
 } from './provider-timeline-event'
 import { ProviderTimelinePlan, type ProviderTimelineSink } from './provider-timeline-plan'
 
-type Stream = {
+/** One open text stream: the row it writes and what continues it. */
+export type ProviderTimelineStream = {
   key: string
   row: ProviderTimelineRow
   channel: ProviderTimelineTextChannel
@@ -50,8 +51,8 @@ export function providerTimelineStreamKey(item: ProviderTimelineTextItem): strin
 }
 
 export class ProviderTimelineTextStreams {
-  private readonly streams = new Map<string, Stream>()
-  private readonly byItemId = new Map<string, Stream>()
+  private readonly streams = new Map<string, ProviderTimelineStream>()
+  private readonly byItemId = new Map<string, ProviderTimelineStream>()
   private readonly coalescer
 
   constructor(
@@ -71,12 +72,12 @@ export class ProviderTimelineTextStreams {
     })
   }
 
-  get(item: ProviderTimelineTextItem): Stream | undefined {
+  get(item: ProviderTimelineTextItem): ProviderTimelineStream | undefined {
     return this.streams.get(providerTimelineStreamKey(item))
   }
 
   /** Whether `start` continues `stream` or begins another message. */
-  continues(stream: Stream, start: ProviderTimelineStreamStart): boolean {
+  continues(stream: ProviderTimelineStream, start: ProviderTimelineStreamStart): boolean {
     return stream.channel === start.channel && stream.producer?.agentId === start.producer?.agentId
   }
 
@@ -85,13 +86,13 @@ export class ProviderTimelineTextStreams {
     plan: ProviderTimelinePlan,
     row: ProviderTimelineRow,
     start: ProviderTimelineStreamStart
-  ): Stream | null {
+  ): ProviderTimelineStream | null {
     const bytes = providerTimelineEntryBytes(row.itemId)
     if (!this.deps.budget.admits(row.itemId, bytes)) {
       plan.refuse(PROVIDER_TIMELINE_OVER_BUDGET)
       return null
     }
-    const stream: Stream = {
+    const stream: ProviderTimelineStream = {
       key: providerTimelineStreamKey(start.item),
       row,
       channel: start.channel,
@@ -108,7 +109,7 @@ export class ProviderTimelineTextStreams {
   }
 
   /** Text arrives after the event is admitted; it changes no row by itself. */
-  planAppend(plan: ProviderTimelinePlan, stream: Stream, text: string): void {
+  planAppend(plan: ProviderTimelinePlan, stream: ProviderTimelineStream, text: string): void {
     plan.commit(() => {
       this.coalescer.append(stream.row.itemId, text)
     })
@@ -125,13 +126,16 @@ export class ProviderTimelineTextStreams {
   }
 
   /** Ends the streams `which` selects; their text was flushed by the same event. */
-  planRelease(plan: ProviderTimelinePlan, which: (stream: Stream) => boolean): void {
+  planRelease(
+    plan: ProviderTimelinePlan,
+    which: (stream: ProviderTimelineStream) => boolean
+  ): void {
     const released = [...this.streams.values()].filter(which)
     plan.commit(() => released.forEach((stream) => this.forget(stream)))
   }
 
   /** Ends one stream with the provider's final text, else what streamed. */
-  planClose(plan: ProviderTimelinePlan, stream: Stream, finalText?: string): void {
+  planClose(plan: ProviderTimelinePlan, stream: ProviderTimelineStream, finalText?: string): void {
     if (finalText === undefined) {
       const owed = this.coalescer.snapshot(stream.row.itemId)
       if (owed && this.coalescer.dirty().some(({ key }) => key === stream.row.itemId)) {
@@ -178,7 +182,7 @@ export class ProviderTimelineTextStreams {
 
   private planText(
     plan: ProviderTimelinePlan,
-    stream: Stream,
+    stream: ProviderTimelineStream,
     text: string,
     providerFinal = false
   ): void {
@@ -205,7 +209,7 @@ export class ProviderTimelineTextStreams {
     })
   }
 
-  private forget(stream: Stream): void {
+  private forget(stream: ProviderTimelineStream): void {
     this.coalescer.forget(stream.row.itemId)
     this.deps.budget.release(stream.row.itemId)
     if (this.streams.get(stream.key) === stream) {

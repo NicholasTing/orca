@@ -5,6 +5,7 @@
 // sink as one transition; the commits run only when the sink admits it, so a refused event leaves
 // the assembler exactly as it was and re-applying it is the retry.
 
+import type { AgentSessionTurnActivity } from '../../../shared/agent-session-wire'
 import type {
   StructuredAgentSessionEventSink,
   StructuredAgentSessionSinkAdmission
@@ -84,6 +85,11 @@ export function providerTimelineSink(
   return {
     tryAppendTransition: (transition) => tryAppendTransition.call(sink, transition),
     journalItems: () => journalItems.call(sink),
-    ...(setActivity ? { setActivity: (activity) => setActivity.call(sink, activity) } : {})
+    ...(setActivity
+      ? {
+          setActivity: (activity: AgentSessionTurnActivity | null) =>
+            setActivity.call(sink, activity)
+        }
+      : {})
   }
 }

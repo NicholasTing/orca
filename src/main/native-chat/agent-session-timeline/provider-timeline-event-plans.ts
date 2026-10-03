@@ -54,7 +54,7 @@ export type ProviderTimelineContext = {
   settlementId: (what: string) => string
 }
 
-type Placement = {
+export type ProviderTimelinePlacement = {
   thread: string | null
   turn: ProviderTimelineKey | null
   scope: AgentJournalTurnScope
@@ -64,7 +64,7 @@ type Placement = {
 export function providerTimelinePlacement(
   context: ProviderTimelineContext,
   join: ProviderTimelineJoin | undefined
-): Placement {
+): ProviderTimelinePlacement {
   const thread = join?.thread ?? null
   const open = context.turns.open
   if (join?.turn === undefined) {
@@ -98,7 +98,7 @@ export function planProviderTimelineBarrier(
   }
 }
 
-type ItemEvent = Extract<
+export type ProviderTimelineItemEvent = Extract<
   ProviderTimelineEvent,
   { type: 'item.open' | 'item.update' | 'item.close' }
 >
@@ -106,7 +106,7 @@ type ItemEvent = Extract<
 export function planProviderTimelineItem(
   context: ProviderTimelineContext,
   plan: ProviderTimelinePlan,
-  event: ItemEvent
+  event: ProviderTimelineItemEvent
 ): ProviderTimelineDropRule | null {
   const change =
     event.type === 'item.open' ? 'open' : event.type === 'item.update' ? 'update' : 'close'
@@ -261,7 +261,7 @@ export function planProviderTimelineWithdrawal(
       const pending =
         (held?.kind === 'approval' || held?.kind === 'question') &&
         held.resolution.state === 'pending'
-      const body = pending ? cancelledJournalPromptBody(held) : null
+      const body = pending && held ? cancelledJournalPromptBody(held) : null
       return body ? [{ kind: 'item', identity: row.identity, body, turnScope: row.scope }] : []
     }
   })

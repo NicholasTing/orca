@@ -233,7 +233,7 @@ export function createProviderTimelineAssembler(
     return null
   }
 
-  const plan = (
+  const planEvent = (
     plan: ProviderTimelinePlan,
     event: Exclude<ProviderTimelineEvent, { type: 'session.reset' }>
   ): ProviderTimelineDropRule | null => {
@@ -313,7 +313,7 @@ export function createProviderTimelineAssembler(
     } else if (ended) {
       dropped = 'session-ended'
     } else {
-      dropped = plan(next, event)
+      dropped = planEvent(next, event)
     }
     const admission = next.submit(deps.sink)
     return dropped ? { admission, dropped } : { admission }

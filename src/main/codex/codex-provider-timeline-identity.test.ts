@@ -56,14 +56,27 @@ const keys = (rows: AgentJournalRenderItem[]) =>
 /** What a client renders from a row; sequence, revision and receipt time are the journal's own. */
 const content = (rows: AgentJournalRenderItem[]) =>
   JSON.stringify(
-    rows.map(({ itemId, body, turnScope, agentId, agentType, parentToolUseId }) => ({
-      itemId,
-      body,
-      turnScope,
-      agentId,
-      agentType,
-      parentToolUseId
-    }))
+    rows.map(
+      ({
+        itemId,
+        body,
+        turnScope,
+        agentId,
+        parentAgentId,
+        providerParentRef,
+        producerKind,
+        attempt
+      }) => ({
+        itemId,
+        body,
+        turnScope,
+        agentId,
+        parentAgentId,
+        providerParentRef,
+        producerKind,
+        attempt
+      })
+    )
   )
 
 describe('Codex identities through the shared assembler', () => {

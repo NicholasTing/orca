@@ -39,7 +39,6 @@ function tool(name: string, state: AgentJournalToolCallItem['state']): AgentJour
 }
 
 function itemStep(
-  recordId: string,
   resolve: Extract<StructuredAgentSessionTransitionStep, { kind: 'item' }>['resolve']
 ): StructuredAgentSessionTransitionStep {
   return {
@@ -82,9 +81,9 @@ describe('structured agent-session transitions', () => {
       lifecycle: false,
       publish: true,
       steps: [
-        itemStep('first', () => ({ identity: first, body: tool('read', 'running') })),
+        itemStep(() => ({ identity: first, body: tool('read', 'running') })),
         // Reads the row the step before it wrote.
-        itemStep('second', (view) => {
+        itemStep((view) => {
           const before = view.itemBody(agentJournalItemKey(first))
           return before?.kind === 'tool-call'
             ? { identity: identity('second'), body: tool(`after-${before.name}`, 'running') }
@@ -112,7 +111,7 @@ describe('structured agent-session transitions', () => {
   it('refuses a transition whole, so none of its steps ever lands', async () => {
     const { journal, deferred, sink, bind } = await rig({ maxQueuedOperations: 1 })
     const step = (recordId: string) =>
-      itemStep(recordId, () => ({ identity: identity(recordId), body: tool(recordId, 'running') }))
+      itemStep(() => ({ identity: identity(recordId), body: tool(recordId, 'running') }))
     const admitted = { lifecycle: false, publish: false, steps: [step('a')] }
     const refused = { lifecycle: false, publish: false, steps: [step('b'), step('c')] }
 
@@ -202,7 +201,7 @@ describe('structured agent-session transitions', () => {
         wrote = result
       },
       steps: [
-        itemStep('nothing', () => null),
+        itemStep(() => null),
         { kind: 'settlement', settlementId: 'none', reservedBytes: 1, resolve: () => [] }
       ]
     })

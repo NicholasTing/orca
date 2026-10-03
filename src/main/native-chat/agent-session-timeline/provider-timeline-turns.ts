@@ -40,7 +40,7 @@ export type ProviderTimelineOpenTurn = ProviderTimelineTurnRef & {
   running: AgentJournalTurnLifecycle
 }
 
-type PendingInput = { clientMessageId: string; requestedAt: number }
+export type ProviderTimelinePendingInput = { clientMessageId: string; requestedAt: number }
 
 export type ProviderTimelineTurnStatus = 'absent' | 'running' | 'settled'
 
@@ -48,7 +48,7 @@ export class ProviderTimelineTurns {
   private current: ProviderTimelineOpenTurn | null = null
   private previous: ProviderTimelineTurnRef | null = null
   private readonly known = new Map<string, 'running' | 'settled'>()
-  private inputs: PendingInput[] = []
+  private inputs: ProviderTimelinePendingInput[] = []
 
   constructor(private readonly addresses: ProviderTimelineAddresses) {}
 
@@ -118,7 +118,7 @@ export class ProviderTimelineTurns {
   }
 
   /** A send reached the provider: it names the open turn if nothing opened that one, else the next. */
-  planInput(plan: ProviderTimelinePlan, input: PendingInput): void {
+  planInput(plan: ProviderTimelinePlan, input: ProviderTimelinePendingInput): void {
     const open = this.current
     if (!open) {
       plan.commit(() => {
