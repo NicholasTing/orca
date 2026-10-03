@@ -28,7 +28,12 @@ export function cliServeProfile(parent: string): { userDataDir: string; env: Nod
   void _unused
   const isolation = createElectronHomeIsolation({
     inheritedEnv: cleanEnv,
-    launchEnv: { NODE_ENV: 'development', ORCA_E2E_HEADLESS: '1' },
+    // The lock flag makes e2e builds take the profile lock this test reads, as the host helper does.
+    launchEnv: {
+      NODE_ENV: 'development',
+      ORCA_E2E_ENFORCE_SINGLE_INSTANCE_LOCK: '1',
+      ORCA_E2E_HEADLESS: '1'
+    },
     extraEnv: {},
     userDataDir
   })
