@@ -644,6 +644,8 @@ jobs:
           ORCA_E2E_PRESERVE_PROFILE_LOGS_DIR: ${{ github.workspace }}\test-results\profile-logs
           # A launch that dies before its window prints this trail into Playwright's call log.
           ORCA_STARTUP_DIAGNOSTICS: '1'
+          ELECTRON_ENABLE_LOGGING: '1'
+          ELECTRON_ENABLE_STACK_DUMPING: '1'
         run: pnpm exec playwright test --config tests/playwright.config.ts tests/e2e/orcad-serve-mode-switch.spec.ts --project=electron-headless --workers=1
       - uses: actions/upload-artifact@v7
         if: failure()
