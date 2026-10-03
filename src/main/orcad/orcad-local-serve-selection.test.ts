@@ -62,11 +62,9 @@ describe('orca serve runtime selection', () => {
     expect(options.materializeSlot).not.toHaveBeenCalled()
   })
 
-  it('serves on orcad by default and when orcad is asked for by name, Windows included', async () => {
+  it('serves on orcad by default and when orcad is asked for by name', async () => {
     for (const env of [{}, { [SERVE_RUNTIME_ENV]: 'orcad' }]) {
-      for (const platform of ['linux', 'win32'] as const) {
-        expect(await selectServeRuntime(input({ env, platform }))).toMatchObject({ kind: 'orcad' })
-      }
+      expect(await selectServeRuntime(input({ env }))).toMatchObject({ kind: 'orcad' })
     }
   })
 
@@ -95,6 +93,7 @@ describe('orca serve runtime selection', () => {
       { env: { [SERVE_RUNTIME_ENV]: 'bun' } },
       'ORCA_SERVE_RUNTIME=bun is neither orcad nor electron'
     ],
+    ['Windows', { platform: 'win32' as const }, 'not enabled on Windows yet'],
     ['packaged macOS', { usesMacUpdateHandoff: true }, 'so paired clients can still update it'],
     ['an unsupported host', { hostTarget: () => 'linux-riscv64-glibc' }, 'no orcad build exists'],
     ['an install without the template', { templateDirs: [] }, 'carries no orcad template'],

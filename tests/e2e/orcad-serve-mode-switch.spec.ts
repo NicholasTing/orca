@@ -162,6 +162,12 @@ test('a terminal survives Electron serve → orcad serve → Electron serve on o
 })
 
 test("Electron serve adopts a terminal orcad's daemon owns", async () => {
+  // Known gap: Electron serve exits (0xFFFF7003) before its window on Windows when it relaunches
+  // onto the daemon orcad forked; fixed, and this re-enabled, in the PR stacked on #24972.
+  test.skip(
+    process.platform === 'win32',
+    "Known Windows gap: Electron serve cannot yet relaunch onto orcad's daemon (follow-up to #24972)"
+  )
   const host = await launchHeadlessPairedRuntimeHost({
     pinnedServePort: true,
     userDataParent: scratch
@@ -248,13 +254,19 @@ function profileLockRole(userDataDir: string): unknown {
 test('`orca serve` runs on orcad by default and on Electron with ORCA_SERVE_RUNTIME=electron', async () => {
   const profile = cliServeProfile(scratch)
   try {
-    const orcad = await startCliServe(profile)
+    const byDefault = await startCliServe(profile)
     try {
-      expect(orcad.stderr()).toContain('[serve] running on orcad')
-      expect(orcad.readiness.health).toBeDefined()
-      expect(profileLockRole(profile.userDataDir)).toBe('orcad')
+      // Windows stays on Electron until Electron serve can adopt orcad's daemon there.
+      if (process.platform === 'win32') {
+        expect(byDefault.stderr()).toContain('not enabled on Windows yet')
+        expect(byDefault.readiness.health).toBeUndefined()
+      } else {
+        expect(byDefault.stderr()).toContain('[serve] running on orcad')
+        expect(byDefault.readiness.health).toBeDefined()
+        expect(profileLockRole(profile.userDataDir)).toBe('orcad')
+      }
     } finally {
-      await orcad.stop()
+      await byDefault.stop()
     }
 
     // Electron serve publishes no build-health block yet, which is what tells the two apart.

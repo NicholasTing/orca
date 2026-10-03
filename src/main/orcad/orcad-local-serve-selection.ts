@@ -61,6 +61,13 @@ export async function selectServeRuntime(
   if (requested && requested !== 'orcad') {
     return electron(`${SERVE_RUNTIME_ENV}=${requested} is neither orcad nor electron`)
   }
+  // Why: Electron serve exits before its window when it relaunches onto a terminal daemon orcad
+  // forked on Windows (orcad-serve-mode-switch-windows, test 2), so Windows keeps Electron.
+  if (input.platform === 'win32') {
+    return electron(
+      'local orcad serve is not enabled on Windows yet (Electron serve cannot yet adopt the terminal daemon orcad started)'
+    )
+  }
   // Why: only packaged macOS serve can take a remote app update, through Electron's updater
   // and this CLI's supervisor; orcad has no updater, so switching would drop that.
   if (input.usesMacUpdateHandoff) {

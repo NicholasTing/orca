@@ -78,9 +78,9 @@ no template in the install, the pinned Node could not be fetched, or a failed na
   the default, and any other value falls back with a reason.
 - Packaged macOS stays on Electron: only Electron serve, supervised by the CLI, can take a remote
   app update there, and orcad has no updater. Recipe-JSON serve has no handoff and uses orcad.
-- Windows serves on orcad too. Both hosts share `<userData>\daemon`, so the daemon pipe name
-  (hashed from that path) is the same, and the relocated Electron daemon host changes only the
-  executable, not the pipe. The `orcad-serve-mode-switch-windows` e2e job gates D7 there.
+- Windows stays on Electron serve for now. Both hosts share `<userData>\daemon` and so one daemon
+  pipe, but Electron serve does not yet relaunch onto a daemon orcad forked there. The
+  `orcad-serve-mode-switch-windows` e2e job gates D7 on Windows and skips that case until it does.
 
 The slot and its pinned Node live under the desktop's `<userData>/orcad-artifacts`.
 
