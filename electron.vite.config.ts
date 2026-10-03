@@ -114,6 +114,18 @@ function createStartupDiagnosticsBanner(chunkName: string): string {
       // Diagnostics must never affect startup.
     }
   }
+  const wipCrashDir = env?.ORCA_WIP_CRASH_DIR
+  if (typeof wipCrashDir === 'string' && wipCrashDir.length > 0 && !globalThis.__ORCA_WIP_CRASHPAD__) {
+    globalThis.__ORCA_WIP_CRASHPAD__ = true
+    try {
+      const electron = require('electron')
+      electron.app.setPath('crashDumps', wipCrashDir)
+      electron.crashReporter.start({ submitURL: '', uploadToServer: false, ignoreSystemCrashHandler: true })
+      writeLine('[bootstrap] wip-crashpad-started dir=' + safeJson(wipCrashDir))
+    } catch (error) {
+      writeLine('[bootstrap] wip-crashpad-error ' + safeJson(String(error)))
+    }
+  }
   const chunkName = ${JSON.stringify(chunkName)}
   writeLine('[bootstrap] bundle-enter chunk=' + safeJson(chunkName) + ' pid=' + process.pid + ' ppid=' + process.ppid + ' execPath=' + safeJson(process.execPath) + ' argv=' + safeJson(process.argv) + ' electronRunAsNode=' + safeJson(env?.ELECTRON_RUN_AS_NODE ?? null))
   if (!globalThis.__ORCA_BOOTSTRAP_EXIT_LOG_INSTALLED__) {

@@ -593,8 +593,8 @@ jobs:
           ORCA_E2E_PRESERVE_PROFILE_LOGS_DIR: ${{ github.workspace }}\test-results\profile-logs
           # A launch that dies before its window prints this trail into Playwright's call log.
           NODE_OPTIONS: --max-old-space-size=4096 --enable-source-maps
-          ORCA_STARTUP_DIAGNOSTICS: trace
-          ORCA_STARTUP_DIAGNOSTICS_TRACE_LIMIT: '400000'
+          ORCA_STARTUP_DIAGNOSTICS: '1'
+          ORCA_WIP_CRASH_DIR: ${{ github.workspace }}\test-results\crashpad
           ORCA_STARTUP_DIAGNOSTICS_FILE: ${{ github.workspace }}\test-results\startup-trace.log
           ELECTRON_ENABLE_LOGGING: '1'
           ELECTRON_ENABLE_STACK_DUMPING: '1'
@@ -605,6 +605,16 @@ jobs:
           New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value "$PWD\test-results\dumps" | Out-Null
           New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
           pnpm exec playwright test --config tests/playwright.config.ts tests/e2e/orcad-serve-mode-switch.spec.ts --project=electron-headless --workers=1
+      - name: Analyze Electron minidumps
+        if: failure()
+        run: |
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
+          Get-ChildItem -Recurse test-results\crashpad -Include *.dmp -ErrorAction SilentlyContinue | ForEach-Object {
+            Write-Host "== $($_.FullName)"
+            if ($cdb) {
+              & $cdb.FullName -z $_.FullName -y 'srv*C:\sym*https://msdl.microsoft.com/download/symbols;srv*C:\sym*https://symbols.electronjs.org' -c '.ecxr; kb 40; !analyze -v; ~*kb 25; q' 2>&1 | Out-String -Width 400
+            } else { Write-Host 'cdb not found' }
+          }
       - name: Leftover processes
         if: failure()
         run: Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'node|electron|orca|cmd|conhost|pwsh' } | Format-Table -AutoSize -Wrap ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Out-String -Width 400
