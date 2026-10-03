@@ -533,11 +533,14 @@ jobs:
           name: e2e-build-out
           path: out/
       # The packaged orcad slot the T6-11 launcher runs: its own node-pty under the pinned Node.
-      - name: Build this runner's orcad slot
+      # The template is what `orca serve`'s default selection materializes that slot from.
+      - name: Build this runner's orcad slot and template
         run: |
+          slot="$(node config/scripts/build-orcad-prebuilds.mjs --print-slot)"
           pnpm build:orcad-prebuilds
-          pnpm build:orcad-prebuilds --require-slots "$(node config/scripts/build-orcad-prebuilds.mjs --print-slot)"
+          pnpm build:orcad-prebuilds --require-slots "$slot"
           pnpm build:orcad
+          node config/scripts/build-orcad-template.mjs --targets "$slot"
       - name: Switch serve hosts on one profile
         env:
           SKIP_BUILD: '1'
