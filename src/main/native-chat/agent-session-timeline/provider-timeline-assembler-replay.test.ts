@@ -192,6 +192,47 @@ describe('requests', () => {
       resolution: { state: 'cancelled' }
     })
   })
+
+  it('leaves an answered request answered when its withdrawal lands after the answer', async () => {
+    const rig = await openProviderTimelineRig()
+    rig.assembler.apply({ type: 'turn.open', turn: 't1', at: 1_000 })
+    rig.assembler.apply({ type: 'request.open', request: 'p1', body: pendingApproval })
+    const identity = parseAgentJournalItemKey(providerItemId('request', 'p1'))
+    if (!identity) {
+      throw new Error('request key did not parse')
+    }
+    // Memory still holds it pending; only the journal knows a client answered.
+    await rig.journal.appendItem(identity, answered, {
+      fence: 1,
+      turnScope: { kind: 'turn', turnItemId: providerTurnItemId('t1') }
+    })
+    rig.assembler.apply({ type: 'request.withdrawn', request: 'p1' })
+    expect((await rig.row(providerItemId('request', 'p1')))?.body).toMatchObject({
+      resolution: { state: 'resolved', selectedOptionId: 'allow' }
+    })
+  })
+
+  it('never overwrites a request row it could not see when it planned the open', async () => {
+    const rig = await openProviderTimelineRig()
+    rig.assembler.apply({ type: 'turn.open', turn: 't1', at: 1_000 })
+    rig.assembler.apply({ type: 'request.open', request: 'p1', body: pendingApproval })
+    const identity = parseAgentJournalItemKey(providerItemId('request', 'p1'))
+    if (!identity) {
+      throw new Error('request key did not parse')
+    }
+    await rig.journal.appendItem(identity, answered, {
+      fence: 1,
+      turnScope: { kind: 'turn', turnItemId: providerTurnItemId('t1') }
+    })
+    const blind = rig.restart({
+      sink: { ...rig.sink, journalItems: () => null },
+      generation: 'gen-2'
+    })
+    blind.apply({ type: 'request.open', request: 'p1', body: pendingApproval })
+    expect((await rig.row(providerItemId('request', 'p1')))?.body).toMatchObject({
+      resolution: { state: 'resolved', selectedOptionId: 'allow' }
+    })
+  })
 })
 
 describe('a new provider session is a new id space', () => {
