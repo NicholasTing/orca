@@ -251,15 +251,17 @@ test('`orca serve` runs on orcad by default and on Electron with ORCA_SERVE_RUNT
     const orcad = await startCliServe(profile)
     try {
       expect(orcad.stderr()).toContain('[serve] running on orcad')
+      expect(orcad.readiness.health).toBeDefined()
       expect(profileLockRole(profile.userDataDir)).toBe('orcad')
     } finally {
       await orcad.stop()
     }
 
+    // Electron serve publishes no build-health block yet, which is what tells the two apart.
     const electron = await startCliServe(profile, { ORCA_SERVE_RUNTIME: 'electron' })
     try {
       expect(electron.stderr()).not.toContain('[serve] running on orcad')
-      expect(profileLockRole(profile.userDataDir)).toBe('desktop')
+      expect(electron.readiness.health).toBeUndefined()
     } finally {
       await electron.stop()
     }
