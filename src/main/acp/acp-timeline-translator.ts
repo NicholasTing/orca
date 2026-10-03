@@ -8,6 +8,7 @@ import {
   type AcpDialectNotification,
   type AcpRequestPresentation
 } from './acp-dialects/acp-dialect'
+import { AcpReplayUserMessages } from './acp-replay-user-messages'
 import { AcpRpcError } from './acp-errors'
 import type { AcpSessionEvent } from './acp-session-runtime'
 import { acpPermissionPresentation } from './acp-timeline-requests'
@@ -39,8 +40,8 @@ export function acpTurnEnd(
   }
 }
 
-type PromptTurn = { turn: string; providerTurn?: string }
-type LoadReplay = { adopt: boolean; turn?: string; serial: number }
+type PromptTurn = { turn: string; providerTurn?: string; durationMs?: number }
+type LoadReplay = { adopt: boolean; turn?: string; serial: number; users: AcpReplayUserMessages }
 
 export type AcpTimelineTranslatorOptions = {
   sessionId: string
@@ -93,7 +94,14 @@ export class AcpTimelineTranslator {
         join: { turn }
       })
     }
-    events.push(acpTurnEnd(turn, result.stopReason, at))
+    events.push(
+      acpTurnEnd(
+        turn,
+        result.stopReason,
+        at,
+        this.prompt?.turn === turn ? this.prompt.durationMs : undefined
+      )
+    )
     this.tools.end(turn)
     if (this.prompt?.turn === turn) {
       this.prompt = undefined
@@ -105,7 +113,11 @@ export class AcpTimelineTranslator {
     if (this.prompt || this.replay) {
       throw new Error('ACP load overlaps a prompt or load')
     }
-    this.replay = { adopt: this.options.journalItems().length === 0, serial: 0 }
+    this.replay = {
+      adopt: this.options.journalItems().length === 0,
+      serial: 0,
+      users: new AcpReplayUserMessages()
+    }
   }
 
   finishLoad(at: number): ProviderTimelineEvent[] {
@@ -156,13 +168,11 @@ export class AcpTimelineTranslator {
         'tool_call_update',
         'plan'
       ].includes(standard.data.update.sessionUpdate)
-    if (
-      isReplay &&
-      this.replay?.adopt &&
-      this.replay.turn &&
-      standard?.success &&
-      standard.data.update.sessionUpdate === 'user_message_chunk'
-    ) {
+    const replayUser =
+      isReplay && this.replay?.adopt && standard?.success
+        ? this.replay.users.observe(standard.data.update)
+        : undefined
+    if (replayUser?.startsMessage && this.replay?.turn) {
       events.push({ type: 'turn.end', turn: this.replay.turn, at, state: 'completed' })
       this.tools.end(this.replay.turn)
       this.replay.turn = undefined
@@ -180,7 +190,17 @@ export class AcpTimelineTranslator {
     }
     if (extension?.end && turn) {
       // Client prompts settle on their own response; extension completions own autonomous turns.
-      if (this.prompt?.turn !== turn) {
+      if (this.prompt?.turn === turn) {
+        this.prompt.durationMs = extension.end.durationMs
+      } else {
+        if (!['end_turn', 'cancelled'].includes(extension.end.stopReason)) {
+          events.push({
+            type: 'provider.frame',
+            frameKind: `turn:${extension.end.stopReason}`,
+            payload: params,
+            ...join
+          })
+        }
         events.push(acpTurnEnd(turn, extension.end.stopReason, at, extension.end.durationMs))
         this.tools.end(turn)
         if (this.replay?.turn === turn) {
@@ -198,7 +218,8 @@ export class AcpTimelineTranslator {
           at,
           isReplay && (this.replay?.adopt ?? false),
           this.tools,
-          this.dialect
+          this.dialect,
+          replayUser?.body
         )
       ]
     }

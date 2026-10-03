@@ -266,4 +266,91 @@ describe('generic ACP translation', () => {
     apply(translator.promptResult('send-1', { stopReason: 'end_turn' }, 1200))
     expect((await rig.rows()).some((row) => messageText(row.body) === 'typed')).toBe(true)
   })
+  it('adopts streamed user history across multiple turns without replacing earlier users', async () => {
+    const { rig, translator, apply, update } = await genericRig()
+    translator.beginLoad()
+    update({
+      sessionUpdate: 'user_message_chunk',
+      messageId: 'user-1',
+      content: { type: 'text', text: 'First ' }
+    })
+    update({
+      sessionUpdate: 'user_message_chunk',
+      messageId: 'user-1',
+      content: { type: 'text', text: 'question' }
+    })
+    update({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'First answer' }
+    })
+    update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'Second ' } })
+    update({ sessionUpdate: 'user_message_chunk', content: { type: 'text', text: 'question' } })
+    update({
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: 'Second answer' }
+    })
+    apply(translator.finishLoad(1200))
+    expect(
+      (await rig.rows()).flatMap((row) =>
+        row.body.kind === 'message' ? [messageText(row.body)] : []
+      )
+    ).toEqual(['First question', 'First answer', 'Second question', 'Second answer'])
+    expect(await rig.turns()).toHaveLength(2)
+  })
+
+  it('evicts completed snapshots during long turns while preserving active tool input', async () => {
+    const { rig, translator, apply, update } = await genericRig()
+    apply(translator.openPrompt('send-1', 1000))
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'active',
+      title: 'Active',
+      rawInput: { important: true }
+    })
+    for (let index = 0; index < 140; index += 1) {
+      update({
+        sessionUpdate: 'tool_call',
+        toolCallId: `done-${index}`,
+        title: 'Read',
+        status: 'pending'
+      })
+      update({
+        sessionUpdate: 'tool_call_update',
+        toolCallId: `done-${index}`,
+        status: 'completed'
+      })
+      await rig.rows()
+    }
+    update({ sessionUpdate: 'tool_call_update', toolCallId: 'active', status: 'failed' })
+    apply(translator.promptResult('send-1', { stopReason: 'cancelled' }, 1200))
+    expect((await rig.row(providerItemId('item', 'tool:active')))?.body).toMatchObject({
+      name: 'Active',
+      input: { important: true },
+      state: 'failed'
+    })
+    expect(
+      (await rig.rows()).filter(
+        (row) => row.body.kind === 'tool-call' && row.body.state === 'completed'
+      )
+    ).toHaveLength(140)
+  })
+
+  it('keeps a valid replacement patch when a diff exceeds the edit-search budget', async () => {
+    const { rig, update } = await genericRig()
+    const oldText = Array.from({ length: 520 }, (_, index) => `old-${index}\n`).join('')
+    const newText = Array.from({ length: 520 }, (_, index) => `new-${index}\n`).join('')
+    update({
+      sessionUpdate: 'tool_call',
+      toolCallId: 'edit',
+      title: 'Edit',
+      status: 'completed',
+      content: [{ type: 'diff', path: 'file.ts', oldText, newText }]
+    })
+    const body = (await rig.rows()).find((row) => row.body.kind === 'diff')?.body
+    if (body?.kind !== 'diff') {
+      throw new Error('Missing diff')
+    }
+    expect(body.patch.truncated).toBe(false)
+    expect(applyPatch(oldText, body.patch.head)).toBe(newText)
+  })
 })

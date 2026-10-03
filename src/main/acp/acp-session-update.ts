@@ -1,3 +1,4 @@
+import type { AgentJournalMessageItem } from '../../shared/agent-session-journal-types'
 import type { ProviderTimelineEvent } from '../native-chat/agent-session-timeline/provider-timeline-event'
 import {
   boundInlineText,
@@ -14,7 +15,8 @@ export function acpSessionUpdate(
   at: number,
   replay: boolean,
   tools: AcpToolTimeline,
-  dialect: AcpDialect
+  dialect: AcpDialect,
+  replayUserBody?: AgentJournalMessageItem
 ): ProviderTimelineEvent[] {
   const update = notification.update
   const join = turn === undefined ? {} : { join: { turn } }
@@ -40,7 +42,7 @@ export function acpSessionUpdate(
             {
               type: 'item.update',
               item: `replay-user:${turn}:${update.messageId ?? ''}`,
-              body: {
+              body: replayUserBody ?? {
                 kind: 'message',
                 role: 'user',
                 blocks: [{ type: 'text', text: update.content.text }]

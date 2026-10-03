@@ -160,10 +160,26 @@ export class AcpToolTimeline {
 
   private remember(key: string, snapshot: ToolSnapshot): void {
     const previous = this.tools.get(key)
-    const bytes = this.bytes - (previous ? this.size(key, previous) : 0) + this.size(key, snapshot)
-    if ((!previous && this.tools.size >= 128) || bytes > 1024 * 1024) {
+    let bytes = this.bytes - (previous ? this.size(key, previous) : 0) + this.size(key, snapshot)
+    let count = this.tools.size + (previous ? 0 : 1)
+    const evicted: string[] = []
+    for (const [candidate, stored] of this.tools) {
+      if (count <= 128 && bytes <= 1024 * 1024) {
+        break
+      }
+      if (candidate !== key && stored.body.state !== 'running') {
+        evicted.push(candidate)
+        count -= 1
+        bytes -= this.size(candidate, stored)
+      }
+    }
+    if (count > 128 || bytes > 1024 * 1024) {
       throw new Error('ACP tool snapshot budget exceeded')
     }
+    for (const candidate of evicted) {
+      this.tools.delete(candidate)
+    }
+    this.tools.delete(key)
     this.tools.set(key, snapshot)
     this.bytes = bytes
   }

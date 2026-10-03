@@ -28,6 +28,7 @@ describe('recorded ACP traffic through the journal', () => {
     expect((await fixture.rig.turns())[0]).toMatchObject({
       state: 'completed',
       outcome: 'success',
+      durationMs: 5289,
       contextUsage: { used: { kind: 'estimate' } }
     })
     expect(tools.every((tool) => tool.turnScope?.kind === 'turn')).toBe(true)
