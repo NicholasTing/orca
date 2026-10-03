@@ -11,19 +11,17 @@ it('does not rescan the forgotten window for each new streamed item', () => {
     ordinals.ordinalFor('thread', String(index), 'item')
     ordinals.forgetTurn('thread', String(index))
   }
-  const turns: unknown = Reflect.get(ordinals, 'turns')
-  if (!(turns instanceof Map)) {
-    throw new Error('ordinals keep their turns in a map')
-  }
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: this test counts reads of the class's private turn map, whose entries carry `active`.
+  const turns = (ordinals as unknown as { turns: Map<string, { active: boolean }> }).turns
   let reads = 0
   for (const turn of turns.values()) {
-    let active: unknown = Reflect.get(turn, 'active')
+    let active = turn.active
     Object.defineProperty(turn, 'active', {
       get() {
         reads += 1
         return active
       },
-      set(value: unknown) {
+      set(value: boolean) {
         active = value
       }
     })
