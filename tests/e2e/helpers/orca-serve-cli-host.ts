@@ -2,7 +2,7 @@
  * `orca serve` through the real CLI (`out/cli/index.js`), so the host it picks is the CLI's own
  * selection: orcad by default, Electron on `ORCA_SERVE_RUNTIME=electron` or a fallback.
  */
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { spawnProcess } from '../../../src/shared/child-process/run-process'
 import { createElectronHomeIsolation } from './electron-home-isolation'
@@ -90,9 +90,13 @@ export async function startCliServe(
         return
       }
       const exited = new Promise((settle) => child.once('exit', settle))
-      // The CLI forwards SIGTERM to the host it started.
+      // POSIX: the CLI forwards SIGTERM to the host it started. Windows has no signal to forward:
+      // kill() ends only the CLI, so the host holding the profile lock is ended too.
       child.kill('SIGTERM')
       await exited
+      if (process.platform === 'win32') {
+        await killProfileLockHolder(profile.userDataDir)
+      }
     }
   }
 }
@@ -115,4 +119,30 @@ function parseReadiness(stdout: string): Record<string, unknown> | null {
     }
   }
   return null
+}
+
+async function killProfileLockHolder(userDataDir: string): Promise<void> {
+  let pid: unknown
+  try {
+    pid = JSON.parse(readFileSync(path.join(userDataDir, 'orcad.lock'), 'utf8')).pid
+  } catch {
+    return
+  }
+  if (typeof pid !== 'number') {
+    return
+  }
+  try {
+    process.kill(pid)
+  } catch {
+    return
+  }
+  const deadline = Date.now() + 30_000
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+    await new Promise((settle) => setTimeout(settle, 100))
+  }
 }

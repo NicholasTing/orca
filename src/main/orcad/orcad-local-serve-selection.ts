@@ -61,13 +61,6 @@ export async function selectServeRuntime(
   if (requested && requested !== 'orcad') {
     return electron(`${SERVE_RUNTIME_ENV}=${requested} is neither orcad nor electron`)
   }
-  // Why: on Windows, Electron's daemon runs from the relocated host and no gate yet proves a
-  // terminal survives a switch between the two serve hosts (D7) there.
-  if (input.platform === 'win32') {
-    return electron(
-      'local orcad serve is not enabled on Windows yet (terminal survival across serve hosts is unproven there)'
-    )
-  }
   // Why: only packaged macOS serve can take a remote app update, through Electron's updater
   // and this CLI's supervisor; orcad has no updater, so switching would drop that.
   if (input.usesMacUpdateHandoff) {
