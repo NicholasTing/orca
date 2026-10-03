@@ -66,11 +66,11 @@ export async function startCliServe(
   let stderr = ''
   child.stderr.on('data', (chunk: Buffer) => (stderr += chunk.toString('utf8')))
   // A first run may fetch and verify the pinned Node before orcad starts.
-  const line = await new Promise<string>((resolve, reject) => {
+  const readiness = await new Promise<Record<string, unknown>>((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error(`orca serve not ready: ${stderr}`)), 240_000)
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8')
-      const ready = stdout.split('\n').find((candidate) => candidate.trim().startsWith('{'))
+      const ready = parseReadiness(stdout)
       if (ready) {
         clearTimeout(timer)
         resolve(ready)
@@ -83,7 +83,7 @@ export async function startCliServe(
   })
   return {
     userDataDir: profile.userDataDir,
-    readiness: JSON.parse(line),
+    readiness,
     stderr: () => stderr,
     stop: async () => {
       if (child.exitCode !== null || child.signalCode !== null) {
@@ -95,4 +95,24 @@ export async function startCliServe(
       await exited
     }
   }
+}
+
+/** orcad prints its readiness on one line; Electron `--serve-json` pretty-prints it. */
+function parseReadiness(stdout: string): Record<string, unknown> | null {
+  const start = stdout.indexOf('{')
+  for (
+    let end = stdout.indexOf('}', start);
+    start !== -1 && end !== -1;
+    end = stdout.indexOf('}', end + 1)
+  ) {
+    try {
+      const parsed: unknown = JSON.parse(stdout.slice(start, end + 1))
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        return Object.fromEntries(Object.entries(parsed))
+      }
+    } catch {
+      // Not a complete object yet; try the next closing brace.
+    }
+  }
+  return null
 }
