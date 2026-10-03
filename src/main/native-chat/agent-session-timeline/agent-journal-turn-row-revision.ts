@@ -156,6 +156,43 @@ export type AgentJournalTurnRowDelivery = {
   options?: Omit<StructuredAgentSessionRevisionOptions, 'turnScope'>
 }
 
+/** Bytes a turn-row write may resolve to. */
+export function agentJournalTurnRowReservedBytes(
+  target: AgentJournalTurnRowTarget,
+  write: AgentJournalTurnRowWrite
+): number {
+  const known = 'identity' in target ? target.identity : null
+  return (
+    (known && write.lifecycle
+      ? estimateStructuredAgentSessionItemBytes(known, write.lifecycle)
+      : TURN_ROW_BYTES_WITHOUT_CONTEXT) + contextBytesBound(write.contextUsage)
+  )
+}
+
+/** The row a turn-row write lands as, read from the journal at execution; null writes nothing. */
+export function resolveAgentJournalTurnRowWrite(
+  journal: StructuredAgentSessionRevisionJournal,
+  target: AgentJournalTurnRowTarget,
+  write: AgentJournalTurnRowWrite,
+  reservedBytes: number
+): { identity: AgentJournalItemIdentity; body: AgentJournalTurnItem } | null {
+  const known = 'identity' in target ? target.identity : null
+  const row = findTurnRow(journal, target)
+  if (write.onlyWhileRunning && row && row.body.state !== 'running') {
+    return null
+  }
+  const identity = known ?? (row ? parseAgentJournalItemKey(row.itemId) : null)
+  const body = reviseTurnBody(row?.body ?? null, withFallbackWindow(journal, write))
+  if (!identity || !body) {
+    return null
+  }
+  if (estimateStructuredAgentSessionItemBytes(identity, body) <= reservedBytes) {
+    return { identity, body }
+  }
+  // Only a row grown by fields this build does not know gets here; the lifecycle still lands.
+  return write.lifecycle ? { identity, body: write.lifecycle } : null
+}
+
 /**
  * Queue one revision of a turn row. A lifecycle write creates the row
  * when it is absent; a context write only ever revises one that exists.
@@ -179,30 +216,11 @@ export function writeAgentJournalTurnRow(
     }
     return { accepted: true }
   }
-  const known = 'identity' in target ? target.identity : null
-  const reservedBytes =
-    (known && write.lifecycle
-      ? estimateStructuredAgentSessionItemBytes(known, write.lifecycle)
-      : TURN_ROW_BYTES_WITHOUT_CONTEXT) + contextBytesBound(write.contextUsage)
+  const reservedBytes = agentJournalTurnRowReservedBytes(target, write)
   return revise.call(
     sink,
     reservedBytes,
-    (journal) => {
-      const row = findTurnRow(journal, target)
-      if (write.onlyWhileRunning && row && row.body.state !== 'running') {
-        return null
-      }
-      const identity = known ?? (row ? parseAgentJournalItemKey(row.itemId) : null)
-      const body = reviseTurnBody(row?.body ?? null, withFallbackWindow(journal, write))
-      if (!identity || !body) {
-        return null
-      }
-      if (estimateStructuredAgentSessionItemBytes(identity, body) <= reservedBytes) {
-        return { identity, body }
-      }
-      // Only a row grown by fields this build does not know gets here; the lifecycle still lands.
-      return write.lifecycle ? { identity, body: write.lifecycle } : null
-    },
+    (journal) => resolveAgentJournalTurnRowWrite(journal, target, write, reservedBytes),
     options
   )
 }

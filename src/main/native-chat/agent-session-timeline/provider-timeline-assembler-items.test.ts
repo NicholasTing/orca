@@ -29,35 +29,35 @@ function messageText(body: AgentJournalItemBody | undefined): string | undefined
 describe('provider timeline items', () => {
   it('scopes interleaved tool calls and text to the turn they ran in, in arrival order', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
+      item: { stream: 'reply' },
       channel: 'assistant',
       text: 'Let me '
     })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
+      item: { stream: 'reply' },
       channel: 'assistant',
       text: 'look.'
     })
-    rig.assembler.apply({ type: 'item.open', itemKey: 'call-a', body: runningTool('read') })
-    rig.assembler.apply({ type: 'item.open', itemKey: 'call-b', body: runningTool('grep') })
+    rig.assembler.apply({ type: 'item.open', item: 'call-a', body: runningTool('read') })
+    rig.assembler.apply({ type: 'item.open', item: 'call-b', body: runningTool('grep') })
     rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'call-b',
+      item: 'call-b',
       body: { ...runningTool('grep'), state: 'completed' }
     })
     rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'call-a',
+      item: 'call-a',
       body: { ...runningTool('read'), state: 'completed' }
     })
     // The tool call ended the anonymous stream, so this text is a new message.
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
+      item: { stream: 'reply' },
       channel: 'assistant',
       text: 'Done.'
     })
@@ -82,15 +82,15 @@ describe('provider timeline items', () => {
 
   it('drops a second close of a settled item and keeps the first terminal body', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'call-a',
+      item: 'call-a',
       body: { ...runningTool('read'), state: 'completed' }
     })
     const repeat = rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'call-a',
+      item: 'call-a',
       body: { ...runningTool('read'), state: 'failed' }
     })
     expect(repeat.dropped).toBe('item-settled')
@@ -101,12 +101,12 @@ describe('provider timeline items', () => {
 
   it('reopens a settled item under the same row', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'item.close', itemKey: 'agent-1', body: runningTool('task') })
-    rig.assembler.apply({ type: 'item.open', itemKey: 'agent-1', body: runningTool('task') })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'item.close', item: 'agent-1', body: runningTool('task') })
+    rig.assembler.apply({ type: 'item.open', item: 'agent-1', body: runningTool('task') })
     rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'agent-1',
+      item: 'agent-1',
       body: { ...runningTool('task'), state: 'completed' }
     })
     const rows = (await rig.rows()).filter((row) => row.body.kind === 'tool-call')
@@ -116,9 +116,9 @@ describe('provider timeline items', () => {
 
   it('replaces a plan in place with each whole-list update', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'item.update', itemKey: 'plan', body: plan('1. read') })
-    rig.assembler.apply({ type: 'item.update', itemKey: 'plan', body: plan('1. read ✓\n2. edit') })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'item.update', item: 'plan', body: plan('1. read') })
+    rig.assembler.apply({ type: 'item.update', item: 'plan', body: plan('1. read ✓\n2. edit') })
     const rows = (await rig.rows()).filter((row) => row.body.kind === 'status')
     expect(rows).toHaveLength(1)
     expect(rows[0]?.body).toMatchObject({ text: '1. read ✓\n2. edit' })
@@ -126,7 +126,7 @@ describe('provider timeline items', () => {
 
   it('writes an item that arrives with no turn open as a thread row, opening no turn', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'item.close', itemKey: 'call-a', body: assistantText('stray') })
+    rig.assembler.apply({ type: 'item.close', item: 'call-a', body: assistantText('stray') })
     expect(rig.assembler.openTurnId).toBeNull()
     const rows = await rig.rows()
     expect(rows).toHaveLength(1)
@@ -135,11 +135,11 @@ describe('provider timeline items', () => {
 
   it('fails a tool call its turn left running, and keeps one that outlives the turn open', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'item.open', itemKey: 'call-a', body: runningTool('read') })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'item.open', item: 'call-a', body: runningTool('read') })
     rig.assembler.apply({
       type: 'item.open',
-      itemKey: 'bg-1',
+      item: 'bg-1',
       body: runningTool('background'),
       outlivesTurn: true
     })
@@ -159,7 +159,7 @@ describe('provider timeline items', () => {
     // It settles on its own close later, still scoped to the turn that started it.
     rig.assembler.apply({
       type: 'item.close',
-      itemKey: 'bg-1',
+      item: 'bg-1',
       body: { ...runningTool('background'), state: 'completed' }
     })
     const background = await rig.row(providerItemId('item', 'bg-1'))
@@ -172,10 +172,10 @@ describe('provider timeline items', () => {
 
   it('stamps the producing subagent on its rows', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'item.open',
-      itemKey: 'call-a',
+      item: 'call-a',
       body: runningTool('read'),
       producer: { agentId: 'helper-1' }
     })
@@ -192,11 +192,21 @@ describe('provider timeline text streams', () => {
         return () => {}
       }
     })
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     for (const text of ['a', 'b', 'c']) {
-      rig.assembler.apply({ type: 'text.delta', streamKey: 'reply', channel: 'assistant', text })
+      rig.assembler.apply({
+        type: 'text.delta',
+        item: { stream: 'reply' },
+        channel: 'assistant',
+        text
+      })
     }
-    rig.assembler.apply({ type: 'text.delta', streamKey: 'think', channel: 'reasoning', text: 'x' })
+    rig.assembler.apply({
+      type: 'text.delta',
+      item: { stream: 'think' },
+      channel: 'reasoning',
+      text: 'x'
+    })
     expect((await rig.rows()).filter((row) => row.body.kind === 'message')).toHaveLength(0)
     runs.splice(0).forEach((run) => run())
     const [reply, single] = (await rig.rows()).filter((row) => row.body.kind === 'message')
@@ -207,33 +217,32 @@ describe('provider timeline text streams', () => {
 
   it('settles with the provider final text, and keys a named message by its id', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
-      itemKey: 'msg-1',
+      item: { id: 'msg-1' },
       channel: 'assistant',
       text: 'Draf'
     })
-    rig.assembler.apply({ type: 'text.close', streamKey: 'reply', text: 'Final answer' })
-    expect(messageText((await rig.row(providerItemId('text', 'msg-1')))?.body)).toBe('Final answer')
-    expect(rig.assembler.apply({ type: 'text.close', streamKey: 'reply' }).dropped).toBe(
+    rig.assembler.apply({ type: 'text.close', item: { id: 'msg-1' }, text: 'Final answer' })
+    expect(messageText((await rig.row(providerItemId('item', 'msg-1')))?.body)).toBe('Final answer')
+    expect(rig.assembler.apply({ type: 'text.close', item: { id: 'msg-1' } }).dropped).toBe(
       'stream-unknown'
     )
   })
 
   it('writes reasoning as a reasoning message, and nothing for a whitespace-only stream', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'think',
+      item: { stream: 'think' },
       channel: 'reasoning',
       text: 'Hmm'
     })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
+      item: { stream: 'reply' },
       channel: 'assistant',
       text: '  \n'
     })

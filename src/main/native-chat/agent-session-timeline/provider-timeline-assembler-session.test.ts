@@ -25,15 +25,15 @@ const approval: AgentJournalApprovalItem = {
 describe('provider timeline session end', () => {
   it('ends the open turn interrupted with no verdict when the child exit was observed', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'item.open', itemKey: 'call-a', body: runningTool('read') })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'item.open', item: 'call-a', body: runningTool('read') })
     rig.assembler.apply({
       type: 'text.delta',
-      streamKey: 'reply',
+      item: { stream: 'reply' },
       channel: 'assistant',
       text: 'Half'
     })
-    rig.assembler.apply({ type: 'request.open', requestKey: 'perm-1', body: approval })
+    rig.assembler.apply({ type: 'request.open', request: 'perm-1', body: approval })
     rig.assembler.apply({
       type: 'session.ended',
       verdict: { state: 'interrupted', completedAt: 4_000 }
@@ -58,7 +58,7 @@ describe('provider timeline session end', () => {
   it('marks the open turn unverifiable with no end when the host lost the child', async () => {
     const rig = await openProviderTimelineRig()
     rig.assembler.apply({ type: 'input.accepted', clientMessageId: 'send-1', requestedAt: 900 })
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({ type: 'session.ended', verdict: { state: 'unverifiable' } })
     const turn = await rig.turn('turn-1')
     expect(turn).toMatchObject({ state: 'unverifiable', startedAt: 1_000, requestedAt: 900 })
@@ -78,15 +78,14 @@ describe('provider timeline session end', () => {
     // A straggler from the dead child must not open a turn nothing would close.
     expect(rig.assembler.apply({ type: 'turn.open', at: 2_500 }).dropped).toBe('session-ended')
     expect(
-      rig.assembler.apply({ type: 'item.open', itemKey: 'call-a', body: runningTool('read') })
-        .dropped
+      rig.assembler.apply({ type: 'item.open', item: 'call-a', body: runningTool('read') }).dropped
     ).toBe('session-ended')
     expect(rig.assembler.openTurnId).toBeNull()
 
-    rig.assembler.apply({ type: 'session.reset', generation: 'gen-2' })
+    rig.assembler.apply({ type: 'session.reset', namespace: 'provider-session-2' })
     rig.assembler.apply({ type: 'turn.open', at: 3_000 })
     const second = rig.assembler.openTurnId
-    expect(second).toBe('orca-turn:gen-2:1')
+    expect(second).not.toBeNull()
     expect(second).not.toBe(first)
     const turns = (await rig.rows()).filter((row) => row.body.kind === 'turn')
     expect(turns.map((row) => row.body)).toEqual([
@@ -99,10 +98,10 @@ describe('provider timeline session end', () => {
 describe('provider timeline requests', () => {
   it('cancels a request its turn left pending', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'request.open', requestKey: 'perm-1', body: approval })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'request.open', request: 'perm-1', body: approval })
     expect(
-      rig.assembler.apply({ type: 'request.open', requestKey: 'perm-1', body: approval }).dropped
+      rig.assembler.apply({ type: 'request.open', request: 'perm-1', body: approval }).dropped
     ).toBe('request-duplicate')
     rig.assembler.apply({
       type: 'turn.end',
@@ -117,15 +116,15 @@ describe('provider timeline requests', () => {
 
   it('never cancels a request a client already answered', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'request.open', requestKey: 'perm-1', body: approval })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'request.open', request: 'perm-1', body: approval })
     const itemId = providerItemId('request', 'perm-1')
     const identity = parseAgentJournalItemKey(itemId)
     if (!identity) {
       throw new Error('request key did not parse')
     }
     // The answer path's compare-and-set wins on another device and writes the row resolved.
-    rig.sink.appendItem(
+    rig.journal.appendItem(
       identity,
       {
         ...approval,
@@ -136,9 +135,8 @@ describe('provider timeline requests', () => {
           resolvedAt: 1_500
         }
       },
-      { turnScope: { kind: 'turn', turnItemId: providerTurnItemId('turn-1') } }
+      { fence: 1, turnScope: { kind: 'turn', turnItemId: providerTurnItemId('turn-1') } }
     )
-    rig.assembler.requestResolved(itemId)
     rig.assembler.apply({ type: 'turn.end', at: 2_000, state: 'completed', outcome: 'success' })
     expect((await rig.row(itemId))?.body).toMatchObject({
       resolution: { state: 'resolved', selectedOptionId: 'allow', resolvedBy: 'phone' }
@@ -147,10 +145,10 @@ describe('provider timeline requests', () => {
 
   it('cancels a request the provider withdrew, once', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
-    rig.assembler.apply({ type: 'request.open', requestKey: 'perm-1', body: approval })
-    rig.assembler.apply({ type: 'request.withdrawn', requestKey: 'perm-1' })
-    expect(rig.assembler.apply({ type: 'request.withdrawn', requestKey: 'perm-1' }).dropped).toBe(
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'request.open', request: 'perm-1', body: approval })
+    rig.assembler.apply({ type: 'request.withdrawn', request: 'perm-1' })
+    expect(rig.assembler.apply({ type: 'request.withdrawn', request: 'perm-1' }).dropped).toBe(
       'request-unknown'
     )
     expect((await rig.row(providerItemId('request', 'perm-1')))?.body).toMatchObject({
@@ -162,7 +160,7 @@ describe('provider timeline requests', () => {
 describe('provider timeline turn facts', () => {
   it('writes context usage onto the turn that just ended, keeping its end', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({ type: 'turn.end', at: 2_000, state: 'completed', outcome: 'success' })
     rig.assembler.apply({
       type: 'context.usage',
@@ -179,13 +177,13 @@ describe('provider timeline turn facts', () => {
   it('sets the live activity line only while a turn is open', async () => {
     const rig = await openProviderTimelineRig()
     expect(rig.assembler.apply({ type: 'activity', text: 'Reading' }).dropped).toBe('no-turn')
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     expect(rig.assembler.apply({ type: 'activity', text: 'Reading' }).dropped).toBeUndefined()
   })
 
   it('journals provider traffic no event covers as the shared fallback row', async () => {
     const rig = await openProviderTimelineRig()
-    rig.assembler.apply({ type: 'turn.open', turnKey: 'turn-1', at: 1_000 })
+    rig.assembler.apply({ type: 'turn.open', turn: 'turn-1', at: 1_000 })
     rig.assembler.apply({
       type: 'provider.frame',
       frameKind: 'session/mystery_update',

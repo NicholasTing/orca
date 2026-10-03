@@ -1,217 +1,284 @@
-// Items and requests the provider has open, and the rows that settle them.
+// Items and requests: what this assembler opened, and how a new event for one is judged.
 //
-// An item's identity comes from its provider key, so a reopen or a replayed event
-// addresses the same row. A close carries the whole terminal body; a second close of
-// a settled item is a duplicate. Whatever is still open when its turn or the session
-// ends is settled here: a running tool call fails, and a pending prompt is cancelled
-// unless a client's answer already resolved it.
+// Memory knows what this assembler wrote in its lifetime; the journal knows every row. A row the
+// journal holds that this assembler never wrote is a replay, and a replay never changes it: a
+// settled tool is not reopened, an answered prompt is not reset. Within its lifetime, a key whose
+// item settled may open again (the same row) and a key whose request settled is a new request (a
+// new row, so the answered one keeps its answer). Every write re-checks the journal when it runs.
 
 import type {
   AgentJournalItemBody,
-  AgentJournalProducerLinkage,
-  AgentJournalTurnScope
+  AgentJournalProducerLinkage
 } from '../../../shared/agent-session-journal-types'
-import { agentJournalItemKey } from '../../../shared/agent-session-journal-item-key'
-import { cancelledJournalPromptBody } from '../agent-session-journal/journal-prompt-body-bounds'
-import type { StructuredAgentSessionSinkAdmission } from '../agent-session-wire/structured-agent-session-event-sink'
-import type {
-  ProviderTimelineIdentityScheme,
-  ProviderTimelineItemFamily
-} from './provider-timeline-identity'
-import type {
-  ProviderTimelineRow,
-  ProviderTimelineSinkWrites
-} from './provider-timeline-sink-writes'
+import { requiresTerminalSettlement } from '../agent-session-journal/journal-terminal-settlement'
+import { estimateStructuredAgentSessionItemBytes } from '../agent-session-wire/structured-agent-session-event-sink-estimate'
+import type { StructuredAgentSessionTransitionJournal } from '../agent-session-wire/structured-agent-session-transition'
+import type { ProviderTimelineRow } from './provider-timeline-addresses'
+import {
+  PROVIDER_TIMELINE_OVER_BUDGET,
+  providerTimelineEntryBytes,
+  type ProviderTimelineBudget
+} from './provider-timeline-budget'
+import type { ProviderTimelinePlan } from './provider-timeline-plan'
+import { settledProviderTimelineBody } from './provider-timeline-settlement'
 
-/** Provider keys remembered as settled, so a repeated close is recognised. */
-const MAX_SETTLED_ITEM_KEYS = 512
+/** Settled keys remembered so a repeat is recognised without asking the journal. */
+const MAX_SETTLED_KEYS = 512
 
-type TrackedRow = ProviderTimelineRow & {
-  family: ProviderTimelineItemFamily
-  providerKey: string
-  /** The turn row the item was opened inside; null for a thread row. */
-  turnItemId: string | null
+export type ProviderTimelineItemChange = 'open' | 'update' | 'close'
+
+type Tracked = {
+  row: ProviderTimelineRow
+  /** A close (or its turn's end) settled it. */
+  closed: boolean
+  /** Its row still waits on a settlement (a running tool, a backgrounded task). */
+  obligation: boolean
   outlivesTurn: boolean
 }
+type Request = { row: ProviderTimelineRow; incarnation: number; pending: boolean }
 
-export type ProviderTimelineRowPlacement = {
-  scope: AgentJournalTurnScope
-  producer?: AgentJournalProducerLinkage
+function settledTool(body: AgentJournalItemBody | null | undefined): boolean {
+  return body?.kind === 'tool-call' && body.state !== 'running'
 }
 
-/** Which open rows a settlement covers: one turn's, or everything when the session ends. */
-export type ProviderTimelineSettlementScope = { turnItemId: string } | 'session'
+function runningTool(body: AgentJournalItemBody): boolean {
+  return body.kind === 'tool-call' && body.state === 'running'
+}
 
 export class ProviderTimelineItems {
-  private readonly open = new Map<string, TrackedRow>()
-  private readonly settled = new Set<string>()
-  private readonly pending = new Map<string, TrackedRow>()
+  private readonly items = new Map<string, Tracked>()
+  private readonly requests = new Map<string, Request>()
 
-  constructor(
-    private readonly deps: {
-      scheme: ProviderTimelineIdentityScheme
-      writes: ProviderTimelineSinkWrites
-    }
-  ) {}
+  constructor(private readonly budget: ProviderTimelineBudget) {}
 
-  openItem(
-    itemKey: string,
+  isClosed(itemId: string): boolean {
+    return this.items.get(itemId)?.closed === true
+  }
+
+  /** A provider-named message began streaming: this assembler wrote that row. */
+  planStreamed(plan: ProviderTimelinePlan, row: ProviderTimelineRow): void {
+    plan.commit(() => {
+      if (!this.items.has(row.itemId)) {
+        this.track(row.itemId, { row, closed: false, obligation: false, outlivesTurn: false })
+      }
+    })
+  }
+
+  /** Why the change writes nothing, or null when it is new work. */
+  judge(
+    change: ProviderTimelineItemChange,
+    row: ProviderTimelineRow,
     body: AgentJournalItemBody,
-    placement: ProviderTimelineRowPlacement,
-    outlivesTurn = false
-  ): StructuredAgentSessionSinkAdmission {
-    const row = this.track('item', itemKey, body, placement, outlivesTurn)
-    this.settled.delete(mapKey('item', itemKey))
-    this.open.set(mapKey('item', itemKey), row)
-    return this.write(row, false)
-  }
-
-  /** The whole current body. A settled item is revised in place and stays settled. */
-  updateItem(
-    itemKey: string,
-    body: AgentJournalItemBody,
-    placement: ProviderTimelineRowPlacement
-  ): StructuredAgentSessionSinkAdmission {
-    const key = mapKey('item', itemKey)
-    const existing = this.open.get(key)
-    const row = existing
-      ? { ...existing, body }
-      : this.track('item', itemKey, body, placement, false)
-    if (!this.settled.has(key)) {
-      this.open.set(key, row)
+    journal: StructuredAgentSessionTransitionJournal | null
+  ): 'item-replayed' | 'item-settled' | null {
+    const known = this.items.get(row.itemId)
+    const held = journal?.itemBody(row.itemId) ?? null
+    if (change === 'open') {
+      return !known && held ? 'item-replayed' : null
     }
-    return this.write(row, false)
-  }
-
-  /** Null when the item already settled: the close is a duplicate. */
-  closeItem(
-    itemKey: string,
-    body: AgentJournalItemBody,
-    placement: ProviderTimelineRowPlacement
-  ): StructuredAgentSessionSinkAdmission | null {
-    const key = mapKey('item', itemKey)
-    if (this.settled.has(key)) {
-      return null
+    if (change === 'update') {
+      return runningTool(body) && (known?.closed || settledTool(held)) ? 'item-settled' : null
     }
-    const existing = this.open.get(key)
-    const row = existing
-      ? { ...existing, body }
-      : this.track('item', itemKey, body, placement, false)
-    this.open.delete(key)
-    this.rememberSettled(key)
-    return this.write(row, true)
+    return known?.closed || (!known && settledTool(held)) ? 'item-settled' : null
   }
 
-  /** Null when the same request is already pending. */
-  openRequest(
-    requestKey: string,
+  /** The item's write, guarded again by the journal when it runs. */
+  plan(
+    plan: ProviderTimelinePlan,
+    change: ProviderTimelineItemChange,
+    row: ProviderTimelineRow,
     body: AgentJournalItemBody,
-    placement: ProviderTimelineRowPlacement
-  ): StructuredAgentSessionSinkAdmission | null {
-    const key = mapKey('request', requestKey)
-    if (this.pending.has(key)) {
-      return null
+    options: { producer?: AgentJournalProducerLinkage; outlivesTurn?: boolean }
+  ): void {
+    const known = this.items.get(row.itemId)
+    const outlivesTurn = options.outlivesTurn ?? known?.outlivesTurn ?? false
+    const obligation = change !== 'close' && (requiresTerminalSettlement(body) || outlivesTurn)
+    const bytes = providerTimelineEntryBytes(row.itemId, body)
+    if (obligation && !this.budget.admits(row.itemId, bytes)) {
+      plan.refuse(PROVIDER_TIMELINE_OVER_BUDGET)
+      return
     }
-    const row = this.track('request', requestKey, body, placement, false)
-    this.pending.set(key, row)
-    return this.write(row, true)
+    const ours = known !== undefined
+    plan.step(
+      {
+        kind: 'item',
+        reservedBytes: estimateStructuredAgentSessionItemBytes(row.identity, body),
+        resolve: (journal) => {
+          const current = journal.itemBody(row.itemId)
+          const replayed = current !== null && !ours && change === 'open'
+          const regresses =
+            settledTool(current) && (runningTool(body) ? change !== 'open' || !ours : !ours)
+          return replayed || regresses ? null : { identity: row.identity, body }
+        },
+        options: { ...options.producer, turnScope: row.scope }
+      },
+      { lifecycle: change !== 'update' }
+    )
+    plan.commit(() => {
+      if (obligation) {
+        this.budget.hold(row.itemId, bytes)
+      } else {
+        this.budget.release(row.itemId)
+      }
+      const closed = change === 'close' || (change === 'update' && known?.closed === true)
+      this.track(row.itemId, { row, closed, obligation, outlivesTurn })
+    })
   }
 
-  /** Null when no such request is pending. */
-  withdrawRequest(requestKey: string): ProviderTimelineRow | null {
-    const key = mapKey('request', requestKey)
-    const row = this.pending.get(key)
-    this.pending.delete(key)
-    return row ? cancelled(row) : null
+  /** The incarnation a request event names, and whether it is new work. */
+  judgeRequest(
+    key: string,
+    rowFor: (incarnation: number) => ProviderTimelineRow,
+    journal: StructuredAgentSessionTransitionJournal | null
+  ):
+    | { open: ProviderTimelineRow }
+    | { adopt: ProviderTimelineRow }
+    | { dropped: 'request-duplicate' | 'request-replayed' } {
+    const known = this.requests.get(key)
+    if (known) {
+      const held = journal?.itemBody(known.row.itemId)
+      // Pending here and in the journal (or not landed yet): the same request again.
+      if (
+        known.pending &&
+        (held === null || held === undefined || settledProviderTimelineBody(held))
+      ) {
+        return { dropped: 'request-duplicate' }
+      }
+      return { open: rowFor(known.incarnation + 1) }
+    }
+    const first = rowFor(1)
+    const held = journal?.itemBody(first.itemId) ?? null
+    if (!held) {
+      return { open: first }
+    }
+    return settledProviderTimelineBody(held) ? { adopt: first } : { dropped: 'request-replayed' }
   }
 
-  /** A client's answer won the journal's compare-and-set; the row is resolved, never re-cancelled. */
-  forgetResolvedRequest(itemId: string): void {
-    for (const [key, row] of this.pending) {
-      if (agentJournalItemKey(row.identity) === itemId) {
-        this.pending.delete(key)
+  planRequest(
+    plan: ProviderTimelinePlan,
+    row: ProviderTimelineRow,
+    body: AgentJournalItemBody | null,
+    key: string,
+    producer?: AgentJournalProducerLinkage
+  ): void {
+    const bytes = providerTimelineEntryBytes(row.itemId, key)
+    if (!this.budget.admits(row.itemId, bytes)) {
+      plan.refuse(PROVIDER_TIMELINE_OVER_BUDGET)
+      return
+    }
+    if (body) {
+      plan.step(
+        {
+          kind: 'item',
+          reservedBytes: estimateStructuredAgentSessionItemBytes(row.identity, body),
+          // A row already there is a client's answer or a replay; neither is overwritten.
+          resolve: (journal) =>
+            journal.itemBody(row.itemId) === null ? { identity: row.identity, body } : null,
+          options: { ...producer, turnScope: row.scope, lifecycle: true }
+        },
+        { lifecycle: true }
+      )
+    }
+    plan.commit(() => {
+      this.budget.hold(row.itemId, bytes)
+      this.requests.delete(key)
+      this.requests.set(key, { row, incarnation: row.address.incarnation, pending: true })
+      this.trimRequests()
+    })
+  }
+
+  /** The pending request a withdrawal names: this assembler's, else one the journal holds pending. */
+  pendingRequest(
+    key: string,
+    rowFor: (incarnation: number) => ProviderTimelineRow,
+    journal: StructuredAgentSessionTransitionJournal | null
+  ): ProviderTimelineRow | null {
+    const known = this.requests.get(key)
+    if (known) {
+      return known.pending ? known.row : null
+    }
+    const first = rowFor(1)
+    const held = journal?.itemBody(first.itemId)
+    return held && settledProviderTimelineBody(held) ? first : null
+  }
+
+  /** The request settled, by withdrawal; its key's next request is a new incarnation. */
+  commitWithdrawn(key: string, row: ProviderTimelineRow): void {
+    this.budget.release(row.itemId)
+    this.requests.set(key, { row, incarnation: row.address.incarnation, pending: false })
+  }
+
+  /** Rows of this turn that stay open past it; the turn's settlement leaves them. */
+  outlivingTurn(): Set<string> {
+    const outliving = new Set<string>()
+    for (const [itemId, item] of this.items) {
+      if (item.obligation && item.outlivesTurn) {
+        outliving.add(itemId)
+      }
+    }
+    return outliving
+  }
+
+  /** The turn's settlement was admitted: everything it covered is settled in memory too. */
+  commitTurnEnd(turnItemId: string): void {
+    for (const [itemId, item] of this.items) {
+      if (item.obligation && !item.outlivesTurn && covers(item.row, turnItemId)) {
+        this.budget.release(itemId)
+        this.track(itemId, { ...item, closed: true, obligation: false })
+      }
+    }
+    for (const request of this.requests.values()) {
+      if (request.pending && covers(request.row, turnItemId)) {
+        this.budget.release(request.row.itemId)
+        request.pending = false
       }
     }
   }
 
-  /** Rows that settle with a turn or the session, forgotten as they are returned. */
-  takeSettlement(scope: ProviderTimelineSettlementScope): ProviderTimelineRow[] {
-    const rows: ProviderTimelineRow[] = []
-    const covers = (row: TrackedRow): boolean =>
-      scope === 'session' || (!row.outlivesTurn && row.turnItemId === scope.turnItemId)
-    for (const [key, row] of this.open) {
-      if (!covers(row)) {
-        continue
-      }
-      this.open.delete(key)
-      this.rememberSettled(key)
-      const body = interruptedBody(row.body)
-      if (body) {
-        rows.push({ ...row, body })
-      }
-    }
-    for (const [key, row] of this.pending) {
-      if (covers(row)) {
-        this.pending.delete(key)
-        const settled = cancelled(row)
-        if (settled) {
-          rows.push(settled)
-        }
-      }
-    }
-    return rows
+  hasOpenWork(): boolean {
+    return (
+      [...this.items.values()].some((item) => item.obligation) ||
+      [...this.requests.values()].some((request) => request.pending)
+    )
   }
 
   reset(): void {
-    this.open.clear()
-    this.settled.clear()
-    this.pending.clear()
-  }
-
-  private track(
-    family: ProviderTimelineItemFamily,
-    providerKey: string,
-    body: AgentJournalItemBody,
-    placement: ProviderTimelineRowPlacement,
-    outlivesTurn: boolean
-  ): TrackedRow {
-    return {
-      family,
-      providerKey,
-      identity: this.deps.scheme.item({ family, key: { source: 'provider', value: providerKey } }),
-      body,
-      attribution: { ...placement.producer, turnScope: placement.scope },
-      turnItemId: placement.scope.kind === 'turn' ? placement.scope.turnItemId : null,
-      outlivesTurn
+    for (const itemId of this.items.keys()) {
+      this.budget.release(itemId)
     }
+    for (const request of this.requests.values()) {
+      this.budget.release(request.row.itemId)
+    }
+    this.items.clear()
+    this.requests.clear()
   }
 
-  private write(row: ProviderTimelineRow, lifecycle: boolean): StructuredAgentSessionSinkAdmission {
-    const admission = this.deps.writes.append(row, lifecycle)
-    return admission.accepted ? this.deps.writes.publish(lifecycle ? { lifecycle } : {}) : admission
-  }
-
-  private rememberSettled(key: string): void {
-    this.settled.add(key)
-    for (const oldest of this.settled) {
-      if (this.settled.size <= MAX_SETTLED_ITEM_KEYS) {
+  private track(itemId: string, item: Tracked): void {
+    this.items.delete(itemId)
+    this.items.set(itemId, item)
+    // Only entries no settlement waits on are forgotten; the budget bounds the rest.
+    for (const [oldest, each] of this.items) {
+      if (this.items.size <= MAX_SETTLED_KEYS + this.budget.size) {
         break
       }
-      this.settled.delete(oldest)
+      if (!each.obligation) {
+        this.items.delete(oldest)
+      }
+    }
+  }
+
+  private trimRequests(): void {
+    for (const [oldest, each] of this.requests) {
+      if (this.requests.size <= MAX_SETTLED_KEYS + this.budget.size) {
+        break
+      }
+      if (!each.pending) {
+        this.requests.delete(oldest)
+      }
     }
   }
 }
 
-function mapKey(family: ProviderTimelineItemFamily, providerKey: string): string {
-  return `${family}:${providerKey}`
-}
-
-function cancelled(row: ProviderTimelineRow): ProviderTimelineRow | null {
-  const body = cancelledJournalPromptBody(row.body)
-  return body ? { ...row, body } : null
-}
-
-/** What an item still open at its end becomes; null when its last body already stands. */
-function interruptedBody(body: AgentJournalItemBody): AgentJournalItemBody | null {
-  return body.kind === 'tool-call' && body.state === 'running' ? { ...body, state: 'failed' } : null
+function covers(row: ProviderTimelineRow, turnItemId: string): boolean {
+  return row.scope.kind === 'turn' && row.scope.turnItemId === turnItemId
 }

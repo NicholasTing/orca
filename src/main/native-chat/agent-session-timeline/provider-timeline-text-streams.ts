@@ -1,18 +1,13 @@
 // Streamed text, as message rows.
 //
-// One stream is one item. A provider that names its messages keys the item by that
-// id; an anonymous stream is keyed by the adapter's stream name plus a serial, and
-// ends at the next non-text event so later text starts a fresh item. Deltas go
-// through the shared coalescer, so a row is a snapshot of the text so far and a
-// burst of tokens costs one write. A stream left open when its turn or the session
-// ends keeps the text it received.
+// A stream the provider names is the item with that id, so its deltas and any full snapshot of it
+// are one row. An anonymous stream becomes a new message each time it starts, and its identity is
+// its name, channel and producer: a change to any starts the next message. Deltas accumulate in
+// the shared coalescer, and a row is a snapshot of the text so far. Text owed to the journal is
+// written inside the next event's transition — every other event is an ordering barrier — or by
+// the coalescer's window; either way it is marked written only once the sink takes it.
 
-import type {
-  AgentJournalItemBody,
-  AgentJournalItemIdentity,
-  AgentJournalRowAttribution
-} from '../../../shared/agent-session-journal-types'
-import { agentJournalItemKey } from '../../../shared/agent-session-journal-item-key'
+import type { AgentJournalProducerLinkage } from '../../../shared/agent-session-journal-types'
 import {
   boundInlineText,
   DEFAULT_JOURNAL_PAYLOAD_LIMITS
@@ -21,51 +16,48 @@ import {
   createAgentSessionDeltaCoalescer,
   type AgentSessionDeltaCoalescerDeps
 } from '../agent-session-wire/agent-session-delta-coalescer'
-import type { StructuredAgentSessionSinkAdmission } from '../agent-session-wire/structured-agent-session-event-sink'
-import type {
-  ProviderTimelineIdentityScheme,
-  ProviderTimelineKey
-} from './provider-timeline-identity'
-import type {
-  ProviderTimelineRowPlacement,
-  ProviderTimelineSettlementScope
-} from './provider-timeline-items'
-import type { ProviderTimelineTextChannel } from './provider-timeline-event'
+import { estimateStructuredAgentSessionItemBytes } from '../agent-session-wire/structured-agent-session-event-sink-estimate'
+import type { ProviderTimelineRow } from './provider-timeline-addresses'
 import {
-  ProviderTimelineAdmission,
-  type ProviderTimelineSinkWrites
-} from './provider-timeline-sink-writes'
+  PROVIDER_TIMELINE_OVER_BUDGET,
+  providerTimelineEntryBytes,
+  type ProviderTimelineBudget
+} from './provider-timeline-budget'
+import type {
+  ProviderTimelineTextChannel,
+  ProviderTimelineTextItem
+} from './provider-timeline-event'
+import { ProviderTimelinePlan, type ProviderTimelineSink } from './provider-timeline-plan'
 
 type Stream = {
-  identity: AgentJournalItemIdentity
-  itemId: string
+  key: string
+  row: ProviderTimelineRow
   channel: ProviderTimelineTextChannel
-  attribution: AgentJournalRowAttribution
-  turnItemId: string | null
+  producer: AgentJournalProducerLinkage | undefined
   anonymous: boolean
   /** Whether any text reached the journal; a whitespace-only stream completes nothing. */
   written: boolean
 }
 
-export type ProviderTimelineTextDelta = {
-  streamKey: string
-  itemKey?: string
+export type ProviderTimelineStreamStart = {
+  item: ProviderTimelineTextItem
   channel: ProviderTimelineTextChannel
-  text: string
+  producer: AgentJournalProducerLinkage | undefined
+}
+
+export function providerTimelineStreamKey(item: ProviderTimelineTextItem): string {
+  return 'id' in item ? `id:${item.id}` : `stream:${item.stream}`
 }
 
 export class ProviderTimelineTextStreams {
   private readonly streams = new Map<string, Stream>()
   private readonly byItemId = new Map<string, Stream>()
   private readonly coalescer
-  private serial = 0
-  private admission = new ProviderTimelineAdmission()
 
   constructor(
     private readonly deps: {
-      scheme: ProviderTimelineIdentityScheme
-      writes: ProviderTimelineSinkWrites
-      generation: () => string
+      sink: ProviderTimelineSink
+      budget: ProviderTimelineBudget
       coalesceMs?: number
       schedule?: AgentSessionDeltaCoalescerDeps['schedule']
     }
@@ -73,65 +65,100 @@ export class ProviderTimelineTextStreams {
     this.coalescer = createAgentSessionDeltaCoalescer({
       ...(deps.coalesceMs === undefined ? {} : { windowMs: deps.coalesceMs }),
       ...(deps.schedule ? { schedule: deps.schedule } : {}),
-      emit: (itemId, text) => {
-        const stream = this.byItemId.get(itemId)
-        return stream ? this.persist(stream, text) : true
-      }
+      // Every stream here is one this assembler holds open; the shared budget counts them.
+      isProtected: () => true,
+      emit: (itemId, text) => this.flushOnWindow(itemId, text)
     })
   }
 
-  delta(
-    delta: ProviderTimelineTextDelta,
-    placement: ProviderTimelineRowPlacement
-  ): StructuredAgentSessionSinkAdmission {
-    this.admission = new ProviderTimelineAdmission()
-    let stream = this.streams.get(delta.streamKey)
-    if (!stream || stream.channel !== delta.channel) {
-      this.release(delta.streamKey)
-      stream = this.start(delta, placement)
-    }
-    if (!this.coalescer.append(stream.itemId, delta.text)) {
-      this.admission.record({ accepted: false, reason: 'backpressure' })
-    }
-    return this.admission.result()
+  get(item: ProviderTimelineTextItem): Stream | undefined {
+    return this.streams.get(providerTimelineStreamKey(item))
   }
 
-  /** Null when no such stream is open. */
-  close(streamKey: string, finalText?: string): StructuredAgentSessionSinkAdmission | null {
-    const stream = this.streams.get(streamKey)
-    if (!stream) {
+  /** Whether `start` continues `stream` or begins another message. */
+  continues(stream: Stream, start: ProviderTimelineStreamStart): boolean {
+    return stream.channel === start.channel && stream.producer?.agentId === start.producer?.agentId
+  }
+
+  /** A new stream into `row`; false when the budget cannot hold it. */
+  planStart(
+    plan: ProviderTimelinePlan,
+    row: ProviderTimelineRow,
+    start: ProviderTimelineStreamStart
+  ): Stream | null {
+    const bytes = providerTimelineEntryBytes(row.itemId)
+    if (!this.deps.budget.admits(row.itemId, bytes)) {
+      plan.refuse(PROVIDER_TIMELINE_OVER_BUDGET)
       return null
     }
-    this.admission = new ProviderTimelineAdmission()
+    const stream: Stream = {
+      key: providerTimelineStreamKey(start.item),
+      row,
+      channel: start.channel,
+      producer: start.producer,
+      anonymous: !('id' in start.item),
+      written: false
+    }
+    plan.commit(() => {
+      this.deps.budget.hold(row.itemId, bytes)
+      this.streams.set(stream.key, stream)
+      this.byItemId.set(row.itemId, stream)
+    })
+    return stream
+  }
+
+  /** Text arrives after the event is admitted; it changes no row by itself. */
+  planAppend(plan: ProviderTimelinePlan, stream: Stream, text: string): void {
+    plan.commit(() => {
+      this.coalescer.append(stream.row.itemId, text)
+    })
+  }
+
+  /** Every stream's unwritten text, ahead of whatever the event writes. */
+  planFlush(plan: ProviderTimelinePlan, except?: string): void {
+    for (const { key, snapshot } of this.coalescer.dirty()) {
+      const stream = this.byItemId.get(key)
+      if (stream && key !== except) {
+        this.planText(plan, stream, snapshot.text)
+      }
+    }
+  }
+
+  /** Ends the streams `which` selects; their text was flushed by the same event. */
+  planRelease(plan: ProviderTimelinePlan, which: (stream: Stream) => boolean): void {
+    const released = [...this.streams.values()].filter(which)
+    plan.commit(() => released.forEach((stream) => this.forget(stream)))
+  }
+
+  /** Ends one stream with the provider's final text, else what streamed. */
+  planClose(plan: ProviderTimelinePlan, stream: Stream, finalText?: string): void {
     if (finalText === undefined) {
-      this.coalescer.flush(stream.itemId)
+      const owed = this.coalescer.snapshot(stream.row.itemId)
+      if (owed && this.coalescer.dirty().some(({ key }) => key === stream.row.itemId)) {
+        this.planText(plan, stream, owed.text)
+      }
     } else {
-      this.persist(stream, boundInlineText(finalText, DEFAULT_JOURNAL_PAYLOAD_LIMITS).text, true)
+      this.planText(
+        plan,
+        stream,
+        boundInlineText(finalText, DEFAULT_JOURNAL_PAYLOAD_LIMITS).text,
+        true
+      )
     }
-    this.forget(streamKey, stream)
-    return this.admission.result()
+    plan.commit(() => this.forget(stream))
   }
 
-  /** Ends every anonymous stream: a non-text event means their messages are over. */
-  releaseAnonymous(): StructuredAgentSessionSinkAdmission {
-    this.admission = new ProviderTimelineAdmission()
-    for (const [streamKey, stream] of this.streams) {
-      if (stream.anonymous) {
-        this.release(streamKey)
-      }
+  /** The window's flush: false keeps the text for a retry, but only while the sink is merely full. */
+  private flushOnWindow(itemId: string, text: string): boolean {
+    const stream = this.byItemId.get(itemId)
+    if (!stream) {
+      return true
     }
-    return this.admission.result()
-  }
-
-  /** Flushes and ends the streams a turn or the session ends, keeping the text they received. */
-  settle(scope: ProviderTimelineSettlementScope): StructuredAgentSessionSinkAdmission {
-    this.admission = new ProviderTimelineAdmission()
-    for (const [streamKey, stream] of this.streams) {
-      if (scope === 'session' || stream.turnItemId === scope.turnItemId) {
-        this.release(streamKey)
-      }
-    }
-    return this.admission.result()
+    const plan = new ProviderTimelinePlan()
+    this.planText(plan, stream, text)
+    const admission = plan.submit(this.deps.sink)
+    // A failed or closed sink can never take it; the session's end owns what it leaves.
+    return admission.accepted || admission.reason !== 'backpressure'
   }
 
   flush(): void {
@@ -140,11 +167,8 @@ export class ProviderTimelineTextStreams {
 
   reset(): void {
     for (const stream of this.streams.values()) {
-      this.coalescer.forget(stream.itemId)
+      this.forget(stream)
     }
-    this.streams.clear()
-    this.byItemId.clear()
-    this.serial = 0
   }
 
   dispose(): void {
@@ -152,64 +176,41 @@ export class ProviderTimelineTextStreams {
     this.coalescer.dispose()
   }
 
-  private start(delta: ProviderTimelineTextDelta, placement: ProviderTimelineRowPlacement): Stream {
-    this.serial += 1
-    const key: ProviderTimelineKey = delta.itemKey
-      ? { source: 'provider', value: delta.itemKey }
-      : { source: 'minted', value: `${this.deps.generation()}:${delta.streamKey}:${this.serial}` }
-    const identity = this.deps.scheme.item({ family: 'text', key })
-    const stream: Stream = {
-      identity,
-      itemId: agentJournalItemKey(identity),
-      channel: delta.channel,
-      attribution: { ...placement.producer, turnScope: placement.scope },
-      turnItemId: placement.scope.kind === 'turn' ? placement.scope.turnItemId : null,
-      anonymous: delta.itemKey === undefined,
-      written: false
+  private planText(
+    plan: ProviderTimelinePlan,
+    stream: Stream,
+    text: string,
+    providerFinal = false
+  ): void {
+    const empty = providerFinal ? text.length === 0 : text.trim().length === 0
+    if (!stream.written && empty) {
+      plan.commit(() => this.coalescer.markFlushed(stream.row.itemId))
+      return
     }
-    this.streams.set(delta.streamKey, stream)
-    this.byItemId.set(stream.itemId, stream)
-    return stream
-  }
-
-  private release(streamKey: string): void {
-    const stream = this.streams.get(streamKey)
-    if (stream) {
-      this.coalescer.flush(stream.itemId)
-      this.forget(streamKey, stream)
+    const { identity, scope } = stream.row
+    const body = {
+      kind: 'message' as const,
+      role: stream.channel === 'assistant' ? ('assistant' as const) : ('reasoning' as const),
+      blocks: [{ type: 'text' as const, text }]
     }
-  }
-
-  private forget(streamKey: string, stream: Stream): void {
-    this.coalescer.forget(stream.itemId)
-    this.streams.delete(streamKey)
-    this.byItemId.delete(stream.itemId)
-  }
-
-  /** False under backpressure, so the coalescer keeps the text for a later flush. */
-  private persist(stream: Stream, text: string, providerFinal = false): boolean {
-    if (!stream.written && !providerFinal && text.trim().length === 0) {
-      return true
-    }
-    if (!stream.written && text.length === 0) {
-      return true
-    }
-    const body: AgentJournalItemBody = {
-      kind: 'message',
-      role: stream.channel === 'assistant' ? 'assistant' : 'reasoning',
-      blocks: [{ type: 'text', text }]
-    }
-    const admission = this.deps.writes.append({
-      identity: stream.identity,
-      body,
-      attribution: stream.attribution
+    plan.step({
+      kind: 'item',
+      reservedBytes: estimateStructuredAgentSessionItemBytes(identity, body),
+      resolve: () => ({ identity, body }),
+      options: { ...stream.producer, turnScope: scope }
     })
-    this.admission.record(admission)
-    if (!admission.accepted) {
-      return false
+    plan.commit(() => {
+      stream.written = true
+      this.coalescer.markFlushed(stream.row.itemId)
+    })
+  }
+
+  private forget(stream: Stream): void {
+    this.coalescer.forget(stream.row.itemId)
+    this.deps.budget.release(stream.row.itemId)
+    if (this.streams.get(stream.key) === stream) {
+      this.streams.delete(stream.key)
     }
-    stream.written = true
-    this.admission.record(this.deps.writes.publish())
-    return true
+    this.byItemId.delete(stream.row.itemId)
   }
 }
