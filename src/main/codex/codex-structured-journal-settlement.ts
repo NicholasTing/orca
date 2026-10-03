@@ -17,7 +17,7 @@ import {
   codexJournalItem,
   codexStreamingJournalItem,
   type CodexThreadItem,
-  type CodexTurnOrdinals
+  type ProviderTurnMessageOrdinals
 } from './codex-structured-item-translation'
 import type { CodexStructuredItemStreams } from './codex-structured-item-streams'
 import type { CodexHelperName } from './codex-collab-agent-item-translation'
@@ -56,7 +56,7 @@ export function settleCodexJournalSession(input: {
   pendingPrompts: ReadonlyMap<string, CodexPendingJournalPrompt>
   currentTurnIds: ReadonlyMap<string, ReadonlySet<string>>
   primaryThreadId: string | null
-  ordinals: CodexTurnOrdinals
+  ordinals: ProviderTurnMessageOrdinals
   /** Terminal lifecycle for a turn the provider left running when it ended; null for a turn a
    *  conversation command claimed, whose record the host settles. */
   settledTurnLifecycle: (threadId: string, turnId: string) => AgentJournalTurnLifecycle | null

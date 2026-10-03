@@ -6,7 +6,7 @@ import type {
 import { agentJournalItemKey } from '../../shared/agent-session-journal-item-key'
 import { projectStructuredItemsToNativeChat } from '../../shared/structured-agent-session-projection'
 import type { StructuredAgentSessionEventSink } from '../native-chat/agent-session-wire/structured-agent-session-event-sink'
-import { CodexTurnOrdinals } from './codex-structured-item-translation'
+import { ProviderTurnMessageOrdinals } from './codex-structured-item-translation'
 import {
   createCodexJournalTranslator,
   MAX_CODEX_GENERIC_BOOKKEEPING_ENTRIES,
@@ -164,7 +164,7 @@ describe('codex journal translation', () => {
   })
 
   it('releases a turn ordinal map when the turn completes', () => {
-    const spy = vi.spyOn(CodexTurnOrdinals.prototype, 'forgetTurn')
+    const spy = vi.spyOn(ProviderTurnMessageOrdinals.prototype, 'forgetTurn')
     try {
       const { translator } = translatorWith()
       translator.handle(TURN_STARTED)

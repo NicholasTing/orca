@@ -28,10 +28,10 @@ export {
   type CodexThreadItem
 } from './codex-thread-item-identity'
 export {
-  CodexTurnOrdinals,
-  MAX_CODEX_TURN_ORDINAL_BYTES,
-  MAX_CODEX_TURN_ORDINAL_ENTRIES
-} from './codex-turn-ordinals'
+  ProviderTurnMessageOrdinals,
+  MAX_PROVIDER_TURN_ORDINAL_BYTES,
+  MAX_PROVIDER_TURN_ORDINAL_ENTRIES
+} from '../native-chat/agent-session-timeline/provider-turn-message-ordinals'
 
 // Codex thread items → journal item bodies.
 

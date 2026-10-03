@@ -1,18 +1,11 @@
-import {
-  boundPayload,
-  digestPayload
-} from '../native-chat/agent-session-journal/journal-payload-bounds'
-
-/** Codex records the user message first in a turn, so a restored submission is
- *  ordinal 0 of `(threadId, turnId)`. */
-export const CODEX_USER_MESSAGE_ORDINAL = 0
+import { boundPayload, digestPayload } from '../agent-session-journal/journal-payload-bounds'
 
 /** Maximum forgotten turn keys retained for late-frame reconciliation. */
-export const MAX_CODEX_TURN_ORDINAL_ENTRIES = 256
-export const MAX_CODEX_TURN_ORDINAL_BYTES = 512 * 1024
+export const MAX_PROVIDER_TURN_ORDINAL_ENTRIES = 256
+export const MAX_PROVIDER_TURN_ORDINAL_BYTES = 512 * 1024
 
 /** Assigns stable message ordinals while retaining a bounded late-frame window. */
-export class CodexTurnOrdinals {
+export class ProviderTurnMessageOrdinals {
   private readonly turns = new Map<
     string,
     { assigned: Map<string, number>; next: number; active: boolean }
@@ -46,7 +39,7 @@ export class CodexTurnOrdinals {
   }
 
   private trimForgotten(): void {
-    while (this.forgottenTurnCount > MAX_CODEX_TURN_ORDINAL_ENTRIES) {
+    while (this.forgottenTurnCount > MAX_PROVIDER_TURN_ORDINAL_ENTRIES) {
       const oldest = this.forgottenTurns.values().next().value
       if (!oldest) {
         break
@@ -67,7 +60,7 @@ export class CodexTurnOrdinals {
 
   private trimBytes(currentTurnKey: string): void {
     this.trimForgotten()
-    while (this.retainedBytes > MAX_CODEX_TURN_ORDINAL_BYTES) {
+    while (this.retainedBytes > MAX_PROVIDER_TURN_ORDINAL_BYTES) {
       const forgotten = this.forgottenTurns.values().next().value
       const oldest = forgotten ?? this.turns.keys().next().value
       if (typeof oldest !== 'string') {

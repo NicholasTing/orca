@@ -7,7 +7,7 @@ import { requiresTerminalSettlement } from '../native-chat/agent-session-journal
 import {
   codexItemIdentity,
   codexJournalItem,
-  CodexTurnOrdinals,
+  ProviderTurnMessageOrdinals,
   readCodexThreadItem,
   type CodexThreadItem
 } from './codex-structured-item-translation'
@@ -35,7 +35,7 @@ import { readCodexDispatchEcho } from './codex-structured-dispatch-echo'
 import type { CodexRowAttribution } from './codex-subagent-linkage'
 
 export class CodexJournalItems {
-  readonly ordinals = new CodexTurnOrdinals()
+  readonly ordinals = new ProviderTurnMessageOrdinals()
   readonly activeItems = new Map<string, CodexActiveJournalItem>()
   readonly streams
   private readonly identities = new Map<string, AgentJournalItemIdentity>()

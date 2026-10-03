@@ -11,9 +11,9 @@ import {
   codexJournalItem,
   codexMessageBlocks,
   codexStreamingJournalItem,
-  CodexTurnOrdinals,
-  MAX_CODEX_TURN_ORDINAL_BYTES,
-  MAX_CODEX_TURN_ORDINAL_ENTRIES,
+  ProviderTurnMessageOrdinals,
+  MAX_PROVIDER_TURN_ORDINAL_BYTES,
+  MAX_PROVIDER_TURN_ORDINAL_ENTRIES,
   isCodexMessageItemType,
   readCodexThreadItem,
   type CodexThreadItem
@@ -59,7 +59,7 @@ const RESUMED_TURN: CodexThreadItem[] = [
 ]
 
 function keysFor(items: CodexThreadItem[]): string[] {
-  const ordinals = new CodexTurnOrdinals()
+  const ordinals = new ProviderTurnMessageOrdinals()
   return items
     .filter((item) => isCodexMessageItemType(item.type))
     .map((item) =>
@@ -71,15 +71,15 @@ function keysFor(items: CodexThreadItem[]): string[] {
 
 describe('codex turn ordinals', () => {
   it('bounds forgotten turn tombstones while retaining the recent window', () => {
-    const ordinals = new CodexTurnOrdinals()
-    const total = MAX_CODEX_TURN_ORDINAL_ENTRIES + 12
+    const ordinals = new ProviderTurnMessageOrdinals()
+    const total = MAX_PROVIDER_TURN_ORDINAL_ENTRIES + 12
     for (let index = 0; index < total; index += 1) {
       const turnId = `turn-${index}`
       expect(ordinals.ordinalFor('thread-many', turnId, 'item-0')).toBe(0)
       ordinals.forgetTurn('thread-many', turnId)
     }
 
-    expect(ordinals.forgottenTurnCount).toBe(MAX_CODEX_TURN_ORDINAL_ENTRIES)
+    expect(ordinals.forgottenTurnCount).toBe(MAX_PROVIDER_TURN_ORDINAL_ENTRIES)
     // The newest completed turn still keeps its counter for a late frame.
     expect(ordinals.ordinalFor('thread-many', `turn-${total - 1}`, 'item-late')).toBe(1)
     // The oldest turn was deterministically evicted and starts a fresh key.
@@ -87,7 +87,7 @@ describe('codex turn ordinals', () => {
   })
 
   it('releases a forgotten turn without ever reusing an ordinal it assigned', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     expect(ordinals.ordinalFor('thread-1', 'turn-1', 'item-1')).toBe(0)
     expect(ordinals.ordinalFor('thread-1', 'turn-1', 'item-2')).toBe(1)
 
@@ -102,12 +102,12 @@ describe('codex turn ordinals', () => {
   })
 
   it('bounds aggregate provider identifier bytes retained by one active turn', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     for (let index = 0; index < 3_000; index += 1) {
       ordinals.ordinalFor('thread', 'turn', `${index}:${'x'.repeat(512)}`)
     }
 
-    expect(ordinals.bytes).toBeLessThanOrEqual(MAX_CODEX_TURN_ORDINAL_BYTES)
+    expect(ordinals.bytes).toBeLessThanOrEqual(MAX_PROVIDER_TURN_ORDINAL_BYTES)
   })
 })
 
@@ -117,7 +117,7 @@ describe('codex item identity', () => {
   })
 
   it('numbers messages 0,1,2 on both sides — the projection skips the dropped command', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     const live = LIVE_TURN.map((item) =>
       codexItemIdentity({ threadId: THREAD_ID, turnId: TURN_ID, item, ordinals })
     )
@@ -136,7 +136,7 @@ describe('codex item identity', () => {
   })
 
   it('assigns an ordinal once and reuses it, so a delta and its completion upsert one row', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     ordinals.ordinalFor(THREAD_ID, TURN_ID, 'item-0')
 
     expect(ordinals.ordinalFor(THREAD_ID, TURN_ID, 'item-1')).toBe(1)
@@ -144,14 +144,14 @@ describe('codex item identity', () => {
   })
 
   it('restarts numbering per turn', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     ordinals.ordinalFor(THREAD_ID, TURN_ID, 'item-0')
 
     expect(ordinals.ordinalFor(THREAD_ID, 'turn-2', 'item-1')).toBe(0)
   })
 
   it('keys a non-message item and a turnless message in the orca namespace', () => {
-    const ordinals = new CodexTurnOrdinals()
+    const ordinals = new ProviderTurnMessageOrdinals()
     const command = codexItemIdentity({
       threadId: THREAD_ID,
       turnId: TURN_ID,
