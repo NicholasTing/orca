@@ -256,9 +256,9 @@ test('`orca serve` runs on orcad by default and on Electron with ORCA_SERVE_RUNT
   try {
     const byDefault = await startCliServe(profile)
     try {
-      // Windows stays on Electron until Electron serve can adopt orcad's daemon there.
+      // Windows defaults to Electron until Electron serve can adopt orcad's daemon there.
       if (process.platform === 'win32') {
-        expect(byDefault.stderr()).toContain('not enabled on Windows yet')
+        expect(byDefault.stderr()).toContain('not the default on Windows yet')
         expect(byDefault.readiness.health).toBeUndefined()
       } else {
         expect(byDefault.stderr()).toContain('[serve] running on orcad')
