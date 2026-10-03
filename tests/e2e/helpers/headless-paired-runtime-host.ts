@@ -149,6 +149,9 @@ export async function launchHeadlessPairedRuntimeHost(
       ).then((home) => assertElectronResolvedIsolatedHome(home, isolation))
     ])
     let serveProcess = app
+    // Why: a failed relaunch leaves only the already-closed app, which dispose must not close again
+    // (that throw would replace the launch error).
+    let serveProcessOpen = true
     return {
       get app() {
         return serveProcess
@@ -165,14 +168,16 @@ export async function launchHeadlessPairedRuntimeHost(
           )
         }
         await closeElectronAppForE2E(serveProcess)
+        serveProcessOpen = false
         await restartOptions.betweenProcesses?.()
         const relaunched = await launchServeProcess()
         serveProcess = relaunched
+        serveProcessOpen = true
         await readServeReadiness(relaunched, { requirePairingOffer: false })
       },
       dispose: async () => {
         await cleanupHeadlessHostResources([
-          () => closeElectronAppForE2E(serveProcess),
+          ...(serveProcessOpen ? [() => closeElectronAppForE2E(serveProcess)] : []),
           () => cleanupE2EDaemons(userDataDir),
           () => preserveProfileLogs(userDataDir),
           () => rmSync(userDataDir, { recursive: true, force: true }),

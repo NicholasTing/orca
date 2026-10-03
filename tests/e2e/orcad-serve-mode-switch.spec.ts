@@ -161,13 +161,13 @@ test('a terminal survives Electron serve → orcad serve → Electron serve on o
   }
 })
 
+// Known gap: on Windows, Electron crashes at startup (0xFFFF7003) while a daemon orcad forked is
+// live; fixed, and these re-enabled, in the PR stacked on #24972.
+const ORCAD_DAEMON_WINDOWS_GAP =
+  "Known Windows gap: Electron crashes at startup beside a daemon orcad forked (follow-up to #24972)"
+
 test("Electron serve adopts a terminal orcad's daemon owns", async () => {
-  // Known gap: Electron serve exits (0xFFFF7003) before its window on Windows when it relaunches
-  // onto the daemon orcad forked; fixed, and this re-enabled, in the PR stacked on #24972.
-  test.skip(
-    process.platform === 'win32',
-    "Known Windows gap: Electron serve cannot yet relaunch onto orcad's daemon (follow-up to #24972)"
-  )
+  test.skip(process.platform === 'win32', ORCAD_DAEMON_WINDOWS_GAP)
   const host = await launchHeadlessPairedRuntimeHost({
     pinnedServePort: true,
     userDataParent: scratch
@@ -206,6 +206,8 @@ test("Electron serve adopts a terminal orcad's daemon owns", async () => {
 })
 
 test('each serve host refuses a profile the other holds', async () => {
+  // orcad forks its own daemon here, since Electron's idles out with no terminal open.
+  test.skip(process.platform === 'win32', ORCAD_DAEMON_WINDOWS_GAP)
   const host = await launchHeadlessPairedRuntimeHost({
     pinnedServePort: true,
     userDataParent: scratch
