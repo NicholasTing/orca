@@ -98,6 +98,18 @@ function stopOrcaServe(serve, userDataDir) {
   }
 }
 
+/** Restored scrollback paints after the pane reattaches, not with the window. */
+async function waitForText(page, text, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if ((await readTerminalTextBestEffort(page)).includes(text)) {
+      return true
+    }
+    await new Promise((settle) => setTimeout(settle, 1_000))
+  }
+  return false
+}
+
 async function run(ctx) {
   const installer = argValue('--installer')
   const template = argValue('--template')
@@ -123,6 +135,8 @@ async function run(ctx) {
     heartbeatFile
   })
   check('desktop terminal heartbeat advancing', await probeHeartbeatAdvancing(heartbeatFile))
+  // Best effort, as in run.mjs: the text read can be empty under the WebGL renderer.
+  const canaryReadable = (await readTerminalTextBestEffort(ctx.session.page)).includes(canary)
   const before = scopedDaemon(userDataDir)
   ctx.daemonPid = before.pid
   check(
@@ -152,10 +166,14 @@ async function run(ctx) {
   ctx.session = await launchInstalledApp({ exePath: installed.exePath, userDataDir })
   await ensureTerminal(ctx.session.page, { allowCreate: false })
   check('desktop reattached the same daemon', scopedDaemon(userDataDir).pid === before.pid)
-  check(
-    'desktop shows the pre-switch terminal',
-    (await readTerminalTextBestEffort(ctx.session.page)).includes(canary)
-  )
+  if (canaryReadable) {
+    check('desktop shows the pre-switch terminal', await waitForText(ctx.session.page, canary))
+  } else {
+    log(
+      'scrollback',
+      'pre-switch text was not readable; reattach is proven by daemon and heartbeat'
+    )
+  }
   check('terminal still running after switching back', await probeHeartbeatAdvancing(heartbeatFile))
   // Durable, not just accepted: write, restart the desktop, and read it back.
   await ctx.session.page.evaluate(() => window.api.settings.set({ terminalFontSize: 15 }))
