@@ -140,7 +140,7 @@ export async function openAcpFixtureRig() {
               resolvedAt: at
             }
           },
-          { fence: 1 }
+          { fence: 1, turnScope: row.turnScope ?? { kind: 'thread' } }
         )
         requests.delete(message.id)
       } else if (direction === 'in' && message.method) {

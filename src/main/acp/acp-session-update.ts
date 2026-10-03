@@ -81,7 +81,10 @@ export function acpSessionUpdate(
     case 'session_info_update':
       // These feed commands, options and the session title, outside the timeline.
       return []
-    default:
+    case 'plan_update':
+    case 'plan_removed':
+    case 'compaction_update':
+    case 'compaction_summary_chunk':
       return [{ type: 'provider.frame', frameKind: update.sessionUpdate, payload: update, ...join }]
   }
 }
