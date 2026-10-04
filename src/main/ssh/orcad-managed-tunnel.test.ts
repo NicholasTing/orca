@@ -83,6 +83,7 @@ function setup(overrides: Partial<SshTarget> = {}) {
       })
     )
   const removeForwardAndWait = vi.fn().mockResolvedValue(null)
+  const ensureServing = vi.fn().mockResolvedValue(undefined)
   // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: a test double for the members the tunnel manager calls.
   const forwardManager = {
     setCallbacks: vi.fn(),
@@ -102,12 +103,14 @@ function setup(overrides: Partial<SshTarget> = {}) {
     // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the tunnel manager reads only getTarget.
     getTargetStore: () => ({ getTarget: vi.fn(() => target) }) as unknown as SshConnectionStore,
     forwardManager,
-    probeTunnel
+    probeTunnel,
+    ensureServing
   })
   return {
     addForward,
     connect,
     connection,
+    ensureServing,
     getConnection,
     getState,
     manager,
@@ -352,6 +355,38 @@ describe.each(['orcadDeployment', 'sshAccess'] as const)(
       expect(state.removeForwardAndWait).toHaveBeenCalledWith('late-forward')
       await state.manager.recoverAfterHostResume(resumeOptions())
       expect(state.probeTunnel).not.toHaveBeenCalled()
+    })
+
+    it('checks that the server is running only when it sets up a fresh forward', async () => {
+      const state = setup()
+
+      await state.manager.ensure(environment())
+      await state.manager.ensure(environment())
+      expect(state.ensureServing).toHaveBeenCalledOnce()
+      expect(state.ensureServing).toHaveBeenCalledWith({
+        environment: expect.objectContaining({ id: 'environment-1' }),
+        target: state.target,
+        connection: state.connection,
+        remotePort: 6_768
+      })
+
+      state.setTransportGeneration(4)
+      await state.manager.ensure(environment())
+      expect(state.ensureServing).toHaveBeenCalledTimes(2)
+    })
+
+    it('starts a server that stopped while the client slept once the tunnel is rebuilt', async () => {
+      const state = setup()
+      await state.manager.ensure(environment())
+      state.probeTunnel.mockResolvedValue(false)
+
+      await state.manager.recoverAfterHostResume(resumeOptions())
+
+      expect(state.reconnect).toHaveBeenCalledOnce()
+      expect(state.ensureServing).toHaveBeenCalledTimes(2)
+      expect(state.ensureServing).toHaveBeenLastCalledWith(
+        expect.objectContaining({ target: state.target, remotePort: 6_768 })
+      )
     })
 
     it('keeps a healthy managed tunnel intact after host resume', async () => {

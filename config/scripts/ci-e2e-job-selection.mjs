@@ -41,13 +41,16 @@ export const NATIVE_IME_E2E_SPEC = 'tests/e2e/terminal-ibus-hangul-native.spec.t
 export const ORCAD_SERVE_MODE_SWITCH_E2E_SPEC = 'tests/e2e/orcad-serve-mode-switch.spec.ts'
 // Needs the orcad template for its host's target, which only its own job builds.
 export const ORCAD_AUTO_CONVERT_E2E_SPEC = 'tests/e2e/ssh-orcad-auto-convert.spec.ts'
+// Shares that job and its template.
+export const ORCAD_IDLE_EXIT_E2E_SPEC = 'tests/e2e/ssh-orcad-idle-exit.spec.ts'
 export const DEDICATED_E2E_SPECS = [
   ...DOCKER_SSH_E2E_SPECS,
   NODE_NETWORK_E2E_SPEC,
   LOCALHOST_SSH_E2E_SPEC,
   NATIVE_IME_E2E_SPEC,
   ORCAD_SERVE_MODE_SWITCH_E2E_SPEC,
-  ORCAD_AUTO_CONVERT_E2E_SPEC
+  ORCAD_AUTO_CONVERT_E2E_SPEC,
+  ORCAD_IDLE_EXIT_E2E_SPEC
 ]
 const dedicatedSpecs = new Set(DEDICATED_E2E_SPECS)
 const dockerSpecs = new Set(DOCKER_SSH_E2E_SPECS)

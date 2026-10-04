@@ -11,10 +11,13 @@ import { SshPortForwardManager } from './ssh-port-forward'
 import { OrcadManagedTunnelTransportProvider } from './orcad-managed-tunnel-transport'
 import {
   OrcadManagedTunnelResumeRecovery,
+  probeManagedOrcadTunnel,
   type ActiveOrcadTunnel,
+  type OrcadManagedServingCheck,
   type OrcadManagedTunnelProbe,
   type OrcadManagedTunnelResumeOptions
 } from './orcad-managed-tunnel-resume'
+import { ensureManagedOrcadServing } from './orcad-managed-wake'
 import { getSshConnectionManager, getSshTargetRegistryStore } from './ssh-target-registry'
 
 type OrcadManagedTunnelDependencies = {
@@ -22,6 +25,8 @@ type OrcadManagedTunnelDependencies = {
   getTargetStore: () => ReturnType<typeof getSshTargetRegistryStore>
   forwardManager?: SshPortForwardManager
   probeTunnel?: OrcadManagedTunnelProbe
+  /** Runs after a fresh forward is up; starts a server that stopped (e.g. after idling). */
+  ensureServing?: OrcadManagedServingCheck
 }
 
 export class OrcadManagedTunnelManager {
@@ -44,7 +49,8 @@ export class OrcadManagedTunnelManager {
       getTargetStore: dependencies.getTargetStore,
       inFlight: this.inFlight,
       ownershipGenerations: this.ownershipGenerations,
-      probeTunnel: dependencies.probeTunnel
+      probeTunnel: dependencies.probeTunnel,
+      ensureServing: dependencies.ensureServing
     })
     this.forwards.setCallbacks({
       onForwardClosed: (entry) => {
@@ -242,12 +248,19 @@ export class OrcadManagedTunnelManager {
       targetId: target.id,
       transportGeneration
     })
+    await this.dependencies.ensureServing?.({
+      environment,
+      target,
+      connection,
+      remotePort: deployment.remotePort
+    })
   }
 }
 
 const managedTunnels = new OrcadManagedTunnelManager({
   getConnectionManager: getSshConnectionManager,
-  getTargetStore: getSshTargetRegistryStore
+  getTargetStore: getSshTargetRegistryStore,
+  ensureServing: (input) => ensureManagedOrcadServing({ ...input, probe: probeManagedOrcadTunnel })
 })
 
 export async function ensureOrcadManagedTunnel(
