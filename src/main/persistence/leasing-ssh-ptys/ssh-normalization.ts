@@ -68,7 +68,10 @@ export function normalizeSshTarget(t: SshTarget): SshTarget {
   }
   return normalizeManagedServerMoveOffered(
     normalizeAppVersionNote(
-      normalizeAppVersionNote(migrateLegacyManagedOrcadOwner(normalized), 'managedServerUnavailable'),
+      normalizeAppVersionNote(
+        migrateLegacyManagedOrcadOwner(normalized),
+        'managedServerUnavailable'
+      ),
       'managedServerUpdateFailure'
     )
   )

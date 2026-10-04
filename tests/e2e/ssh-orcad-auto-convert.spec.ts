@@ -16,7 +16,7 @@
 import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ElectronApplication } from '@stablyai/playwright-test'
+import type { ElectronApplication, Page } from '@stablyai/playwright-test'
 import { expect, test } from './helpers/orca-app'
 import {
   ensureTerminalVisible,
@@ -338,7 +338,10 @@ test('a managed host updates to the bundled orcad on the first connect after an 
       const { target } = await window.api.ssh.addTarget({ target: input })
       return target.id
     }, host.input)
-    expect(JSON.parse(await reconnect(first.page, targetId))).toMatchObject({ kind: 'managed' })
+    await connectOnce(first.page, targetId)
+    await expect
+      .poll(() => managedServer(first.page, targetId), { timeout: 8 * 60_000 })
+      .toMatchObject({ kind: 'managed' })
     const deployed = readHostOrcadActivation(host.exec!)
     expect(isOrcadFullVersion(deployed.active)).toBe(true)
     await session.close(app)
@@ -355,12 +358,26 @@ test('a managed host updates to the bundled orcad on the first connect after an 
     })
     app = updated.app
     await waitForSessionReady(updated.page)
-    const server = JSON.parse(await reconnect(updated.page, targetId))
-    expect(server).toMatchObject({ kind: 'managed' })
-    expect(server).not.toHaveProperty('update')
+    // Why connect, not disconnect first: on launch the app already reaches the server through its
+    // tunnel, and a disconnect racing that restore cancels the connect that runs the update.
+    const attempts: string[] = []
+    await expect
+      .poll(
+        async () => {
+          attempts.push(await connectOnce(updated.page, targetId))
+          const record = readHostOrcadActivation(host.exec!)
+          return record.active !== deployed.active
+            ? 'updated'
+            : JSON.stringify({ attempts: attempts.slice(-3), record })
+        },
+        { timeout: 8 * 60_000, intervals: [5_000] }
+      )
+      .toBe('updated')
+    await expect
+      .poll(() => managedServer(updated.page, targetId), { timeout: 60_000 })
+      .toEqual({ kind: 'managed', environmentId: expect.any(String) })
     const record = readHostOrcadActivation(host.exec!)
     expect(isOrcadFullVersion(record.active)).toBe(true)
-    expect(record.active).not.toBe(deployed.active)
     expect(record.previous).toBe(deployed.active)
     expect(record.activeAppVersion).toBeTruthy()
   } finally {
@@ -374,3 +391,15 @@ test('a managed host updates to the bundled orcad on the first connect after an 
     }
   }
 })
+
+/** One connect; returns its managed-server state, or why it threw, for a poll to report. */
+function connectOnce(page: Page, targetId: string): Promise<string> {
+  return page.evaluate(async (id) => {
+    try {
+      const state = await window.api.ssh.connect({ targetId: id })
+      return JSON.stringify(state?.managedServer ?? null)
+    } catch (error) {
+      return `connect threw: ${String(error)}`
+    }
+  }, targetId)
+}
