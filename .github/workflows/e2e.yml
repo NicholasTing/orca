@@ -594,7 +594,6 @@ jobs:
           # A launch that dies before its window prints this trail into Playwright's call log.
           NODE_OPTIONS: --max-old-space-size=4096 --enable-source-maps
           ORCA_STARTUP_DIAGNOSTICS: '1'
-          ORCA_WIP_CRASH_DIR: ${{ github.workspace }}\test-results\crashpad
           ORCA_STARTUP_DIAGNOSTICS_FILE: ${{ github.workspace }}\test-results\startup-trace.log
           ELECTRON_ENABLE_LOGGING: '1'
           ELECTRON_ENABLE_STACK_DUMPING: '1'
@@ -695,12 +694,12 @@ jobs:
         env:
           SKIP_BUILD: '1'
           ORCA_E2E_LAUNCH_CONTROL: '1'
+          ORCA_E2E_WIP_CREATE_APPDATA: '1'
           ORCA_E2E_FORWARD_APP_LOGS: '1'
           ORCA_E2E_PRESERVE_PROFILE_LOGS_DIR: ${{ github.workspace }}\test-results\profile-logs
           # A launch that dies before its window prints this trail into Playwright's call log.
           NODE_OPTIONS: --max-old-space-size=4096 --enable-source-maps
           ORCA_STARTUP_DIAGNOSTICS: '1'
-          ORCA_WIP_CRASH_DIR: ${{ github.workspace }}\test-results\crashpad
           ORCA_STARTUP_DIAGNOSTICS_FILE: ${{ github.workspace }}\test-results\startup-trace.log
           ELECTRON_ENABLE_LOGGING: '1'
           ELECTRON_ENABLE_STACK_DUMPING: '1'

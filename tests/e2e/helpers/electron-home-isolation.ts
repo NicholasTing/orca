@@ -76,6 +76,10 @@ export function createElectronHomeIsolation({
   // short names). Git canonicalizes worktree paths, so a non-canonical HOME
   // makes freshly created worktrees invisible to Orca's listing comparisons.
   const isolatedHome = realpathSync.native(requestedIsolatedHome)
+  if (process.platform === 'win32' && process.env.ORCA_E2E_WIP_CREATE_APPDATA === '1') {
+    mkdirSync(path.join(isolatedHome, 'AppData', 'Roaming'), { recursive: true })
+    mkdirSync(path.join(isolatedHome, 'AppData', 'Local'), { recursive: true })
+  }
   // Why: a bad fixture path must fail before Electron can resolve a real Codex
   // home; userData isolation alone does not change app.getPath('home').
   if (areSameHomePath(isolatedHome, realHome)) {
