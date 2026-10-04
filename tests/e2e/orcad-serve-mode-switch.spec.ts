@@ -51,47 +51,6 @@ test.beforeAll(async () => {
   await buildDaemonSessionClient(clientScript)
 })
 
-// WIP diagnostics: native binaries and electron dist must not change between tests.
-function wipNativeHashes(): string {
-  const { createHash } = require('node:crypto') as typeof import('node:crypto')
-  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs')
-  const out: string[] = []
-  const walk = (dir: string, depth: number): void => {
-    let entries: string[] = []
-    try {
-      entries = readdirSync(dir)
-    } catch {
-      return
-    }
-    for (const entry of entries) {
-      const full = path.join(dir, entry)
-      let st
-      try {
-        st = statSync(full)
-      } catch {
-        continue
-      }
-      if (st.isDirectory() && depth > 0) walk(full, depth - 1)
-      else if (/\.(node|asar|pak|dat|bin|dll|exe)$/.test(entry)) {
-        out.push(`${createHash('sha256').update(readFileSync(full)).digest('hex').slice(0, 12)} ${st.mtimeMs} ${full}`)
-      }
-    }
-  }
-  const pnpm = path.resolve('node_modules/.pnpm')
-  for (const pkg of readdirSync(pnpm)) {
-    if (/^(ssh2|cpu-features|node-pty|@vscode\+windows-process-tree|electron@)/.test(pkg)) walk(path.join(pnpm, pkg), 7)
-  }
-  return out.sort().join('\n')
-}
-let wipBefore = ''
-test.beforeEach(() => {
-  wipBefore = wipNativeHashes()
-})
-test.afterEach(() => {
-  const after = wipNativeHashes()
-  console.log(after === wipBefore ? '[wip-hashes] unchanged' : `[wip-hashes] CHANGED\nbefore:\n${wipBefore}\nafter:\n${after}`)
-})
-
 test.afterAll(() => {
   if (scratch) {
     rmSync(scratch, { recursive: true, force: true })
