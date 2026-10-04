@@ -599,21 +599,54 @@ jobs:
           ELECTRON_ENABLE_LOGGING: '1'
           ELECTRON_ENABLE_STACK_DUMPING: '1'
         run: |
-          New-Item -ItemType Directory -Force test-results\dumps | Out-Null
+          New-Item -ItemType Directory -Force test-results\dumps,test-results\silent-exit | Out-Null
           $key = 'HKLM:\SOFTWARE\Microsoft\Windows\Windows Error Reporting\LocalDumps\electron.exe'
           New-Item -Force $key | Out-Null
           New-ItemProperty -Force $key -Name DumpFolder -PropertyType ExpandString -Value "$PWD\test-results\dumps" | Out-Null
           New-ItemProperty -Force $key -Name DumpType -PropertyType DWord -Value 1 | Out-Null
+          # Crashpad ends an unconnected crash with TerminateProcess, which only silent-exit monitoring dumps.
+          $ifeo = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\electron.exe'
+          New-Item -Force $ifeo | Out-Null
+          New-ItemProperty -Force $ifeo -Name GlobalFlag -PropertyType DWord -Value 0x200 | Out-Null
+          $spe = 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SilentProcessExit\electron.exe'
+          New-Item -Force $spe | Out-Null
+          New-ItemProperty -Force $spe -Name ReportingMode -PropertyType DWord -Value 2 | Out-Null
+          New-ItemProperty -Force $spe -Name IgnoreSelfExits -PropertyType DWord -Value 0 | Out-Null
+          New-ItemProperty -Force $spe -Name LocalDumpFolder -PropertyType String -Value "$PWD\test-results\silent-exit" | Out-Null
+          New-ItemProperty -Force $spe -Name DumpType -PropertyType DWord -Value 0x1004 | Out-Null
+          $tree = "$PWD\test-results\process-tree.log"
+          $poller = Start-Job -ArgumentList $tree -ScriptBlock {
+            param($out)
+            $seen = @{}
+            while ($true) {
+              foreach ($p in Get-CimInstance Win32_Process -Filter "Name='electron.exe' or Name='node.exe'") {
+                if (-not $seen.ContainsKey($p.ProcessId)) {
+                  $seen[$p.ProcessId] = 1
+                  "$((Get-Date).ToString('HH:mm:ss.fff')) pid=$($p.ProcessId) ppid=$($p.ParentProcessId) $($p.Name) $($p.CommandLine)" | Add-Content $out
+                }
+              }
+              Start-Sleep -Milliseconds 150
+            }
+          }
           pnpm exec playwright test --config tests/playwright.config.ts tests/e2e/orcad-serve-mode-switch.spec.ts --project=electron-headless --workers=1
+          $code = $LASTEXITCODE
+          Stop-Job $poller
+          exit $code
       - name: Analyze Electron minidumps
         if: failure()
         run: |
-          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\Debuggers\x64\cdb.exe' -ErrorAction SilentlyContinue | Select-Object -First 1
-          Get-ChildItem -Recurse test-results\crashpad -Include *.dmp -ErrorAction SilentlyContinue | ForEach-Object {
+          Get-ChildItem -Recurse test-results\silent-exit,test-results\dumps,test-results\crashpad -ErrorAction SilentlyContinue | Format-Table -AutoSize FullName,Length | Out-String -Width 400
+          $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits','C:\Program Files\Windows Kits' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          if (-not $cdb) {
+            choco install windbg -y --no-progress 2>&1 | Select-Object -Last 3
+            $cdb = Get-ChildItem 'C:\Program Files (x86)\Windows Kits','C:\Program Files\Windows Kits','C:\ProgramData\chocolatey' -Recurse -Filter cdb.exe -ErrorAction SilentlyContinue | Where-Object { $_.FullName -match 'x64' } | Select-Object -First 1
+          }
+          Write-Host "cdb: $($cdb.FullName)"
+          Get-ChildItem -Recurse test-results\silent-exit,test-results\dumps,test-results\crashpad -Include *.dmp -ErrorAction SilentlyContinue | ForEach-Object {
             Write-Host "== $($_.FullName)"
             if ($cdb) {
-              & $cdb.FullName -z $_.FullName -y 'srv*C:\sym*https://msdl.microsoft.com/download/symbols;srv*C:\sym*https://symbols.electronjs.org' -c '.ecxr; kb 40; !analyze -v; ~*kb 25; q' 2>&1 | Out-String -Width 400
-            } else { Write-Host 'cdb not found' }
+              & $cdb.FullName -z $_.FullName -y 'srv*C:\sym*https://msdl.microsoft.com/download/symbols' -c '|; .lastevent; .exr -1; .ecxr; kb 40; ~*kb 30; lmn; q' 2>&1 | Out-String -Width 400
+            }
           }
       - name: Leftover processes
         if: failure()
