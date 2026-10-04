@@ -3,6 +3,7 @@
  * Every step reads the terminal census through the server's tunnel first; an unanswered census
  * is unverifiable, never zero, so an update over live or uncounted terminals defers (D7).
  */
+import { getAppEnvironment } from '../../shared/app-environment'
 import { refreshManagedOrcadPairing } from '../../shared/runtime-environment-managed-orcad-store'
 import { assertRuntimeEnvironmentNotReconciling } from '../../shared/runtime-environment-reconciliation-record'
 import {
@@ -33,6 +34,7 @@ import {
   requireManagedOrcadEnvironment,
   resolveLinkedOrcadContext
 } from './orcad-managed-runtime-context'
+import type { OrcadRemoteContext } from './orcad-remote-context'
 import { readRemoteOrcadBuildHash } from './orcad-remote-build-hash'
 import { deployOrcad } from './orcad-remote-deploy'
 import { pruneManagedOrcadVersions } from './orcad-managed-version-gc'
@@ -74,59 +76,70 @@ export function updateManagedOrcadEnvironment(
   userDataPath: string,
   args: LifecycleArgs & { force?: boolean }
 ): Promise<OrcadManagedDeployResult> {
-  return withManagedOrcadLifecycle(
-    userDataPath,
-    args.selector,
-    async ({ environment, deployment }) => {
-      const context = await resolveLinkedOrcadContext(environment, deployment, args.signal)
-      const census = await collectManagedTerminalCensus(
-        userDataPath,
-        environment,
-        context.activationRecord
-      )
-      const localOrcadDir = await materializeOrcadArtifact(context.serverTarget, {
-        signal: args.signal
-      })
-      const slot = managedOrcadSlot(context, deployment.remotePort, args.signal)
-      const result = await deployOrcad({
-        ...slot,
-        localOrcadDir,
-        target: context.serverTarget,
-        census,
-        force: args.force
-      })
-      if (result.outcome === 'installed-not-activated') {
-        const deferral = {
-          outcome: 'deferred' as const,
-          candidateVersion: result.fullVersion,
-          code: result.code,
-          reason: result.reason,
-          forceable: isForceableOrcadDeferral(result.code)
-        }
-        recordManagedOrcadUpdateDeferral(environment.id, deferral)
-        return deferral
-      }
-      clearManagedOrcadUpdateDeferral(environment.id)
-      const readiness = await probeManagedOrcadReadiness(
-        context,
-        localOrcadDir,
-        result.fullVersion,
-        args.signal
-      )
-      await pruneManagedOrcadVersions({
-        slot,
-        serverTarget: context.serverTarget,
-        activeVersion: result.fullVersion,
-        readiness
-      })
-      const updated = refreshPairing(userDataPath, environment, readiness, deployment.localPort)
-      return {
-        outcome: result.outcome === 'already-active' ? 'already-current' : 'updated',
-        environment: redactRuntimeEnvironment(updated),
-        activeVersion: result.fullVersion
-      }
-    }
+  return withManagedOrcadLifecycle(userDataPath, args.selector, async (managed) =>
+    runManagedOrcadUpdate(
+      userDataPath,
+      managed,
+      await resolveLinkedOrcadContext(managed.environment, managed.deployment, args.signal),
+      args
+    )
   )
+}
+
+/** The Managed servers update, run inside the target's lifecycle queue with a resolved context. */
+export async function runManagedOrcadUpdate(
+  userDataPath: string,
+  { environment, deployment }: ReturnType<typeof requireManagedOrcadEnvironment>,
+  context: OrcadRemoteContext,
+  args: { force?: boolean; signal?: AbortSignal; localOrcadDir?: string }
+): Promise<OrcadManagedDeployResult> {
+  const census = await collectManagedTerminalCensus(
+    userDataPath,
+    environment,
+    context.activationRecord
+  )
+  const localOrcadDir =
+    args.localOrcadDir ??
+    (await materializeOrcadArtifact(context.serverTarget, { signal: args.signal }))
+  const slot = managedOrcadSlot(context, deployment.remotePort, args.signal)
+  const result = await deployOrcad({
+    ...slot,
+    localOrcadDir,
+    target: context.serverTarget,
+    census,
+    force: args.force,
+    appVersion: getAppEnvironment().getVersion()
+  })
+  if (result.outcome === 'installed-not-activated') {
+    const deferral = {
+      outcome: 'deferred' as const,
+      candidateVersion: result.fullVersion,
+      code: result.code,
+      reason: result.reason,
+      forceable: isForceableOrcadDeferral(result.code)
+    }
+    recordManagedOrcadUpdateDeferral(environment.id, deferral)
+    return deferral
+  }
+  clearManagedOrcadUpdateDeferral(environment.id)
+  const readiness = await probeManagedOrcadReadiness(
+    context,
+    localOrcadDir,
+    result.fullVersion,
+    args.signal
+  )
+  await pruneManagedOrcadVersions({
+    slot,
+    serverTarget: context.serverTarget,
+    activeVersion: result.fullVersion,
+    readiness
+  })
+  const updated = refreshPairing(userDataPath, environment, readiness, deployment.localPort)
+  return {
+    outcome: result.outcome === 'already-active' ? 'already-current' : 'updated',
+    environment: redactRuntimeEnvironment(updated),
+    activeVersion: result.fullVersion
+  }
 }
 
 export function rollbackManagedOrcadEnvironment(

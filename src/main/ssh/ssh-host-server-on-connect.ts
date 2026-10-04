@@ -2,26 +2,32 @@
  * Which server an SSH host runs, decided once per connect before any relay is started.
  *
  * Every host runs managed orcad: an empty host deploys it, a host with Orca state converts through
- * the journaled migration, and a converted host connects through its tunnel. A host whose relay
- * terminals are live, or can't be proven exited, keeps the relay this session and converts on a
- * later connect. A host orcad can't run on keeps the pinned-relay ladder, with the reason recorded
- * so the deploy isn't retried on every connect. A host whose sshd refuses port forwarding reaches
- * its server through the stdio bridge (orcad-managed-tunnel-transport.ts) instead.
+ * the journaled migration, and a converted host connects through its tunnel, updating first when
+ * it runs an older build and its terminals allow. A host whose relay terminals are live, or can't
+ * be proven exited, keeps the relay this session and converts on a later connect. A host orcad
+ * can't run on keeps the pinned-relay ladder, with the reason recorded so the deploy isn't retried
+ * on every connect. A host whose sshd refuses port forwarding reaches its server through the
+ * stdio bridge (orcad-managed-tunnel-transport.ts) instead.
  */
 import type {
   OrcadManagedConversionResult,
   OrcadManagedDeployResult
 } from '../../shared/orcad-managed-runtime'
-import type { SshManagedServerRelayReason, SshTarget } from '../../shared/ssh-types'
+import type {
+  SshManagedServerRelayReason,
+  SshManagedServerUpdateNote,
+  SshTarget
+} from '../../shared/ssh-types'
+import type { ManagedOrcadAutoUpdateOutcome } from './orcad-managed-auto-update'
 import {
   classifyOrcadHostUnavailable,
   ORCAD_TUNNEL_UNAVAILABLE_REASON
 } from './orcad-host-unavailable'
 
-export type HostServerPhase = 'deploying' | 'converting' | 'connecting'
+export type HostServerPhase = 'deploying' | 'converting' | 'connecting' | 'updating'
 
 export type HostServerOnConnectResult =
-  | { route: 'managed'; environmentId: string }
+  | { route: 'managed'; environmentId: string; update?: SshManagedServerUpdateNote }
   | {
       route: 'relay'
       reason: SshManagedServerRelayReason
@@ -60,6 +66,15 @@ export type HostServerOnConnectDeps = {
   isFencedBeforeStaging: (target: SshTarget) => boolean
   /** Unregisters that unreachable server and releases its fence, so the relay serves again. */
   releaseUnreachableSetup: (target: SshTarget) => Promise<void>
+  /** Runs the Managed servers update when the host is behind this app; `onUpdating` fires first. */
+  autoUpdate: (
+    environmentId: string,
+    options: { failedBefore: boolean; onUpdating: () => void }
+  ) => Promise<ManagedOrcadAutoUpdateOutcome>
+  /** Why an update to this app version already failed on the host, so it isn't retried. */
+  recordedUpdateFailure: (target: SshTarget) => string | null
+  recordUpdateFailure: (target: SshTarget, reason: string) => void
+  clearUpdateFailure: (target: SshTarget) => void
 }
 
 export async function resolveHostServerOnConnect(
@@ -93,7 +108,8 @@ export async function resolveHostServerOnConnect(
     await deps.retireRetainedSource(target).catch((error: unknown) => {
       console.warn('[ssh] Source retirement deferred to a later connect:', error)
     })
-    return { route: 'managed', environmentId: existing }
+    const update = await updateOnConnect(target, existing, deps)
+    return { route: 'managed', environmentId: existing, ...(update ? { update } : {}) }
   }
   const recorded = deps.recordedUnavailable(target)
   if (recorded) {
@@ -122,6 +138,48 @@ export async function resolveHostServerOnConnect(
   } catch (error) {
     console.warn('[ssh] Managed Orca server setup failed; using the relay this session:', error)
     return unfinished(target, deps, classifyOrcadHostUnavailable(error), empty, 'failed')
+  }
+}
+
+/** The host keeps serving whatever happens here, so nothing in it can fail the connect. */
+async function updateOnConnect(
+  target: SshTarget,
+  environmentId: string,
+  deps: HostServerOnConnectDeps
+): Promise<SshManagedServerUpdateNote | undefined> {
+  const failure = deps.recordedUpdateFailure(target)
+  let result: ManagedOrcadAutoUpdateOutcome
+  try {
+    result = await deps.autoUpdate(environmentId, {
+      failedBefore: failure !== null,
+      onUpdating: () => deps.progress(target, 'updating')
+    })
+  } catch (error) {
+    console.warn('[ssh] Could not check the managed Orca server for an update:', error)
+    return undefined
+  }
+  // Why clear on current too: a Managed servers update may have landed the build since.
+  if (
+    failure !== null &&
+    (result.outcome === 'updated' || (result.outcome === 'skipped' && result.reason === 'current'))
+  ) {
+    deps.clearUpdateFailure(target)
+  }
+  switch (result.outcome) {
+    case 'updated':
+      return undefined
+    case 'deferred':
+      return { state: 'deferred', detail: result.reason }
+    case 'failed':
+      deps.recordUpdateFailure(target, result.reason)
+      return { state: 'failed', detail: result.reason }
+    case 'skipped':
+      if (result.reason === 'host-newer') {
+        return { state: 'host-newer' }
+      }
+      return result.reason === 'failed-before' && failure
+        ? { state: 'failed', detail: failure }
+        : undefined
   }
 }
 

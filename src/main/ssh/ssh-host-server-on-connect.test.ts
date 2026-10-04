@@ -30,6 +30,10 @@ function deps(overrides: Partial<HostServerOnConnectDeps> = {}): HostServerOnCon
     progress: vi.fn(),
     isFencedBeforeStaging: () => false,
     releaseUnreachableSetup: vi.fn(async () => undefined),
+    autoUpdate: vi.fn(async () => ({ outcome: 'skipped' as const, reason: 'current' as const })),
+    recordedUpdateFailure: () => null,
+    recordUpdateFailure: vi.fn(),
+    clearUpdateFailure: vi.fn(),
     ...overrides
   }
 }
@@ -238,5 +242,111 @@ describe('which server an SSH host runs on connect', () => {
     })
     await expect(resolveHostServerOnConnect(target, d)).rejects.toBe(failure)
     expect(d.releaseUnreachableSetup).not.toHaveBeenCalled()
+  })
+
+  describe('updating a managed host on connect', () => {
+    const managed = (overrides: Partial<HostServerOnConnectDeps>) =>
+      deps({ managedEnvironmentId: () => 'env-9', ...overrides })
+
+    it('connects without a note when the host already runs this build', async () => {
+      const d = managed({})
+      await expect(resolveHostServerOnConnect(target, d)).resolves.toEqual({
+        route: 'managed',
+        environmentId: 'env-9'
+      })
+      expect(d.autoUpdate).toHaveBeenCalledWith(
+        'env-9',
+        expect.objectContaining({ failedBefore: false })
+      )
+      expect(d.progress).not.toHaveBeenCalledWith(target, 'updating')
+    })
+
+    it('updates an older idle host, showing the update in the status line', async () => {
+      const d = managed({
+        autoUpdate: vi.fn(async (_id, options) => {
+          options.onUpdating()
+          return { outcome: 'updated' as const, activeVersion: '0.1.0+b' }
+        })
+      })
+      await expect(resolveHostServerOnConnect(target, d)).resolves.toEqual({
+        route: 'managed',
+        environmentId: 'env-9'
+      })
+      expect(d.progress).toHaveBeenCalledWith(target, 'updating')
+      expect(d.recordUpdateFailure).not.toHaveBeenCalled()
+    })
+
+    it('keeps the old version serving while terminals run, and retries on a later connect', async () => {
+      const reason = '2 terminals are running on this host.'
+      const d = managed({
+        autoUpdate: async () => ({
+          outcome: 'deferred',
+          code: 'orcad_update_terminals_running',
+          reason
+        })
+      })
+      await expect(resolveHostServerOnConnect(target, d)).resolves.toEqual({
+        route: 'managed',
+        environmentId: 'env-9',
+        update: { state: 'deferred', detail: reason }
+      })
+      expect(d.recordUpdateFailure).not.toHaveBeenCalled()
+    })
+
+    it('never downgrades a host a newer Orca activated', async () => {
+      const d = managed({
+        autoUpdate: async () => ({ outcome: 'skipped', reason: 'host-newer' })
+      })
+      await expect(resolveHostServerOnConnect(target, d)).resolves.toEqual({
+        route: 'managed',
+        environmentId: 'env-9',
+        update: { state: 'host-newer' }
+      })
+    })
+
+    it('records a rolled-back update so the same app version does not retry it', async () => {
+      const reason = 'Candidate failed readiness. orcad 0.1.0+a was restarted and is serving again.'
+      const failed = managed({ autoUpdate: async () => ({ outcome: 'failed', reason }) })
+      await expect(resolveHostServerOnConnect(target, failed)).resolves.toMatchObject({
+        route: 'managed',
+        update: { state: 'failed', detail: reason }
+      })
+      expect(failed.recordUpdateFailure).toHaveBeenCalledWith(target, reason)
+
+      const later = managed({
+        recordedUpdateFailure: () => reason,
+        autoUpdate: vi.fn(async () => ({
+          outcome: 'skipped' as const,
+          reason: 'failed-before' as const
+        }))
+      })
+      await expect(resolveHostServerOnConnect(target, later)).resolves.toMatchObject({
+        update: { state: 'failed', detail: reason }
+      })
+      expect(later.autoUpdate).toHaveBeenCalledWith(
+        'env-9',
+        expect.objectContaining({ failedBefore: true })
+      )
+      expect(later.recordUpdateFailure).not.toHaveBeenCalled()
+    })
+
+    it('clears a recorded failure once the host runs this build', async () => {
+      const d = managed({ recordedUpdateFailure: () => 'earlier' })
+      await resolveHostServerOnConnect(target, d)
+      expect(d.clearUpdateFailure).toHaveBeenCalledWith(target)
+    })
+
+    it('still connects when the update check itself throws', async () => {
+      const d = managed({
+        autoUpdate: async () => {
+          throw new Error('ssh dropped')
+        }
+      })
+      await expect(resolveHostServerOnConnect(target, d)).resolves.toEqual({
+        route: 'managed',
+        environmentId: 'env-9'
+      })
+      expect(d.recordUpdateFailure).not.toHaveBeenCalled()
+    })
   })
 })

@@ -1,5 +1,10 @@
 /** User-facing words for which server an SSH host runs; every string goes through the catalog. */
-import type { SshConnectionState, SshTarget } from '../../../../shared/ssh-types'
+import type {
+  SSH_MANAGED_SERVER_PHASES,
+  SshConnectionState,
+  SshManagedServerUpdateNote,
+  SshTarget
+} from '../../../../shared/ssh-types'
 import { translate } from '@/i18n/i18n'
 
 export type SshHostServerStatusLine = {
@@ -22,6 +27,9 @@ export function sshHostServerStatusLine(
         'Changed on an older Orca: runs the relay until it is moved to its managed server again.'
       )
     }
+  }
+  if (status?.kind === 'managed' && status.update) {
+    return managedUpdateLine(status.update)
   }
   if (status?.kind === 'managed' || (!status && target.orcadFence)) {
     return {
@@ -83,7 +91,38 @@ function retryLine(): SshHostServerStatusLine {
   }
 }
 
-function settingUpLabel(phase: 'deploying' | 'converting' | 'connecting'): string {
+function managedUpdateLine(update: SshManagedServerUpdateNote): SshHostServerStatusLine {
+  switch (update.state) {
+    case 'host-newer':
+      return {
+        tone: 'muted',
+        text: translate(
+          'auto.components.settings.sshHostServer.hostNewer',
+          'Runs a managed Orca server from a newer Orca; it keeps that version.'
+        )
+      }
+    case 'deferred':
+      return {
+        tone: 'muted',
+        text: translate(
+          'auto.components.settings.sshHostServer.updateDeferred',
+          'Runs a managed Orca server; it updates on a later connect: {{reason}}',
+          { reason: update.detail ?? '' }
+        )
+      }
+    case 'failed':
+      return {
+        tone: 'warning',
+        text: translate(
+          'auto.components.settings.sshHostServer.updateFailed',
+          'Runs a managed Orca server on its previous version; updating it failed: {{reason}}',
+          { reason: update.detail ?? '' }
+        )
+      }
+  }
+}
+
+function settingUpLabel(phase: (typeof SSH_MANAGED_SERVER_PHASES)[number]): string {
   switch (phase) {
     case 'deploying':
       return translate(
@@ -99,6 +138,11 @@ function settingUpLabel(phase: 'deploying' | 'converting' | 'connecting'): strin
       return translate(
         'auto.components.settings.sshHostServer.connecting',
         'Connecting to the managed Orca server…'
+      )
+    case 'updating':
+      return translate(
+        'auto.components.settings.sshHostServer.updating',
+        'Updating managed server…'
       )
   }
 }

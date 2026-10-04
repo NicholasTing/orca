@@ -1,6 +1,10 @@
 /** The connect path's managed-server step: decide the host's server, and publish a managed connect. */
 import { getAppEnvironment } from '../../shared/app-environment'
-import type { SshConnectionState, SshTarget } from '../../shared/ssh-types'
+import type {
+  SshConnectionState,
+  SshManagedServerUpdateNote,
+  SshTarget
+} from '../../shared/ssh-types'
 import type { HostServerOnConnectResult } from '../ssh/ssh-host-server-on-connect'
 import { relayServerStatus, shouldToastManagedServerMove } from '../ssh/ssh-host-server-move-offer'
 import { setSshHostServerStatus } from '../ssh/ssh-host-server-status'
@@ -31,9 +35,10 @@ export async function decideHostServer(
 
 export function publishManagedServerConnect(
   targetId: string,
-  environmentId: string
+  environmentId: string,
+  update?: SshManagedServerUpdateNote
 ): SshConnectionState {
-  const managedServer = { kind: 'managed' as const, environmentId }
+  const managedServer = { kind: 'managed' as const, environmentId, ...(update ? { update } : {}) }
   setSshHostServerStatus(targetId, managedServer)
   const state: SshConnectionState = {
     ...(connectionManager!.getState(targetId) ?? { targetId, reconnectAttempt: 0 }),

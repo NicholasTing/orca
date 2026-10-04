@@ -99,6 +99,8 @@ export type SshTarget = {
   managedServerUnavailable?: { reason: string; appVersion: string }
   /** Main-owned: the one-time "move now" offer was shown under this app version. */
   managedServerMoveOffered?: { appVersion: string }
+  /** Main-owned: updating the managed server to this app version failed; retried once it changes. */
+  managedServerUpdateFailure?: { reason: string; appVersion: string }
   orcadFence?: {
     environmentId: string
     /** An older build changed the retained source rows: the host stays on the relay until moved again. */
@@ -115,6 +117,7 @@ export type SshTargetCreateInput = Omit<
   | 'orcadFence'
   | 'managedServerUnavailable'
   | 'managedServerMoveOffered'
+  | 'managedServerUpdateFailure'
 >
 export type SshTargetUpdateInput = Partial<SshTargetCreateInput>
 
@@ -257,7 +260,20 @@ export type SshConnectionState = {
   managedServer?: SshManagedServerStatus
 }
 
-export const SSH_MANAGED_SERVER_PHASES = ['deploying', 'converting', 'connecting'] as const
+export const SSH_MANAGED_SERVER_PHASES = [
+  'deploying',
+  'converting',
+  'connecting',
+  'updating'
+] as const
+
+export const SSH_MANAGED_SERVER_UPDATE_STATES = ['host-newer', 'deferred', 'failed'] as const
+
+/** Why a managed server kept its version on this connect; absent when it is current or updated. */
+export type SshManagedServerUpdateNote = {
+  state: (typeof SSH_MANAGED_SERVER_UPDATE_STATES)[number]
+  detail?: string
+}
 
 export const SSH_MANAGED_SERVER_RELAY_REASONS = [
   'orcad_unavailable',
@@ -272,7 +288,7 @@ export const SSH_MANAGED_SERVER_RELAY_REASONS = [
 export type SshManagedServerRelayReason = (typeof SSH_MANAGED_SERVER_RELAY_REASONS)[number]
 
 export type SshManagedServerStatus =
-  | { kind: 'managed'; environmentId: string }
+  | { kind: 'managed'; environmentId: string; update?: SshManagedServerUpdateNote }
   | { kind: 'setting-up'; phase: (typeof SSH_MANAGED_SERVER_PHASES)[number] }
   /** `detail` names the blocker for a refusal, or why orcad can't run on the host. */
   | {

@@ -47,6 +47,26 @@ describe('SSH host server status line', () => {
     ).not.toHaveProperty('action')
   })
 
+  it('shows a managed server being updated, and why it kept its version', () => {
+    expect(
+      sshHostServerStatusLine(plain, { managedServer: { kind: 'setting-up', phase: 'updating' } })
+        ?.text
+    ).toBe('Updating managed server…')
+    const managed = (update: { state: 'host-newer' | 'deferred' | 'failed'; detail?: string }) =>
+      sshHostServerStatusLine(plain, {
+        managedServer: { kind: 'managed', environmentId: 'e', update }
+      })
+    expect(managed({ state: 'host-newer' })?.text).toContain('from a newer Orca')
+    expect(managed({ state: 'deferred', detail: '2 terminals are running.' })).toMatchObject({
+      tone: 'muted',
+      text: expect.stringContaining('2 terminals are running.')
+    })
+    expect(managed({ state: 'failed', detail: 'readiness timed out' })).toMatchObject({
+      tone: 'warning',
+      text: expect.stringContaining('readiness timed out')
+    })
+  })
+
   it('keeps durable reasons visible without a live state', () => {
     expect(sshHostServerStatusLine({ orcadFence: { environmentId: 'e' } }, undefined)?.text).toBe(
       'Runs a managed Orca server'

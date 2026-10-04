@@ -67,7 +67,10 @@ export function normalizeSshTarget(t: SshTarget): SshTarget {
     normalized.remoteRuntimeResolution = remoteRuntimeResolution
   }
   return normalizeManagedServerMoveOffered(
-    normalizeManagedServerUnavailable(migrateLegacyManagedOrcadOwner(normalized))
+    normalizeAppVersionNote(
+      normalizeAppVersionNote(migrateLegacyManagedOrcadOwner(normalized), 'managedServerUnavailable'),
+      'managedServerUpdateFailure'
+    )
   )
 }
 
@@ -84,15 +87,18 @@ function migrateLegacyManagedOrcadOwner(target: SshTarget): SshTarget {
   return { ...rest, orcadFence: target.orcadFence ?? { environmentId } }
 }
 
-function normalizeManagedServerUnavailable(target: SshTarget): SshTarget {
-  if (target.managedServerUnavailable === undefined) {
+function normalizeAppVersionNote(
+  target: SshTarget,
+  key: 'managedServerUnavailable' | 'managedServerUpdateFailure'
+): SshTarget {
+  if (target[key] === undefined) {
     return target
   }
-  const { reason, appVersion } = target.managedServerUnavailable ?? {}
+  const { reason, appVersion } = target[key] ?? {}
   if (typeof reason === 'string' && typeof appVersion === 'string') {
-    return { ...target, managedServerUnavailable: { reason, appVersion } }
+    return { ...target, [key]: { reason, appVersion } }
   }
-  const { managedServerUnavailable: _malformed, ...rest } = target
+  const { [key]: _malformed, ...rest } = target
   return rest
 }
 

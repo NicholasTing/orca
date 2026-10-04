@@ -10,6 +10,7 @@ import {
   blockDockerSshRelayTargetTcpForwarding,
   cleanupDockerSshRelayTarget,
   DOCKER_SSH_RELAY_REMOTE_REPO_PATH,
+  execDockerSshRelayTargetCommand,
   startDockerSshRelayTarget
 } from './docker-ssh-relay-target'
 
@@ -24,6 +25,8 @@ export type OrcadConvertHost = {
   cleanup: () => void
   /** Docker only: makes sshd refuse TCP forwarding for connections opened after it. */
   blockTcpForwarding?: () => void
+  /** Docker only: runs a shell command on the host as the SSH user and returns its stdout. */
+  exec?: (command: string) => string
 }
 
 /** `docker`, or the path of a Windows host-cell descriptor. */
@@ -44,7 +47,8 @@ export function startOrcadConvertHost(source: string, testInfo: TestInfo): Orcad
       remoteRepoPath: DOCKER_SSH_RELAY_REMOTE_REPO_PATH,
       remoteFolderPath: '/tmp',
       cleanup: () => cleanupDockerSshRelayTarget(target),
-      blockTcpForwarding: () => blockDockerSshRelayTargetTcpForwarding(target)
+      blockTcpForwarding: () => blockDockerSshRelayTargetTcpForwarding(target),
+      exec: (command) => execDockerSshRelayTargetCommand(target, command)
     }
   }
   const descriptor = parseWindowsHostCellDescriptor(readFileSync(source, 'utf8'))

@@ -8,6 +8,7 @@
  */
 import {
   parseOrcadActivationRecord,
+  coreOrcadActivationRecord,
   serializeOrcadActivationRecord,
   type OrcadActivationRecord
 } from './orcad-activation-record'
@@ -220,7 +221,10 @@ export function sameOrcadActivationRecord(
   left: OrcadActivationRecord,
   right: OrcadActivationRecord
 ): boolean {
-  return serializeOrcadActivationRecord(left) === serializeOrcadActivationRecord(right)
+  return (
+    serializeOrcadActivationRecord(coreOrcadActivationRecord(left)) ===
+    serializeOrcadActivationRecord(coreOrcadActivationRecord(right))
+  )
 }
 
 function parseNestedRecord(

@@ -3,6 +3,7 @@
  * The target claim is the resume point: an interrupted deploy leaves the target owned by the
  * environment id it was creating, and the next deploy of that target finishes the same one.
  */
+import { getAppEnvironment } from '../../shared/app-environment'
 import { randomUUID } from 'node:crypto'
 import { assertRuntimeEnvironmentNotReconciling } from '../../shared/runtime-environment-reconciliation-record'
 import { listEnvironments } from '../../shared/runtime-environment-store'
@@ -122,7 +123,8 @@ export async function createManagedOrcadEnvironment(
         census: context.activationRecord.active
           ? { liveSessions: null, startedSinceActivation: null, daemonProtocolVersion: null }
           : { liveSessions: 0, startedSinceActivation: 0, daemonProtocolVersion: null },
-        force: args.force
+        force: args.force,
+        appVersion: getAppEnvironment().getVersion()
       })
       if (deployResult.outcome === 'installed-not-activated') {
         return {

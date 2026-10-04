@@ -4,10 +4,15 @@ import type {
   SshConnectionState,
   SshConnectionStatus,
   SshManagedServerStatus,
+  SshManagedServerUpdateNote,
   SshPlainSshMode,
   SshProviderEpoch
 } from './ssh-types'
-import { SSH_MANAGED_SERVER_PHASES, SSH_MANAGED_SERVER_RELAY_REASONS } from './ssh-types'
+import {
+  SSH_MANAGED_SERVER_PHASES,
+  SSH_MANAGED_SERVER_RELAY_REASONS,
+  SSH_MANAGED_SERVER_UPDATE_STATES
+} from './ssh-types'
 import { clampUtf8TextPrefix, measureUtf8ByteLength } from './utf8-byte-limits'
 
 export const SSH_RETAINED_IDENTIFIER_MAX_UTF8_BYTES = 1024
@@ -108,9 +113,13 @@ function admitSshManagedServerStatus(value: unknown): { managedServer?: SshManag
     return {}
   }
   if (value.kind === 'managed' && 'environmentId' in value) {
-    return isSshRetainedIdentifier(value.environmentId)
-      ? { managedServer: { kind: 'managed', environmentId: value.environmentId } }
-      : {}
+    if (!isSshRetainedIdentifier(value.environmentId)) {
+      return {}
+    }
+    const update = admitSshManagedServerUpdateNote('update' in value ? value.update : undefined)
+    return {
+      managedServer: { kind: 'managed', environmentId: value.environmentId, ...update }
+    }
   }
   if (value.kind === 'setting-up' && 'phase' in value) {
     const phase = SSH_MANAGED_SERVER_PHASES.find((entry) => entry === value.phase)
@@ -134,6 +143,26 @@ function admitSshManagedServerStatus(value: unknown): { managedServer?: SshManag
         : {}),
       ...(isNonNegativeSafeInteger(terminals) ? { terminals } : {}),
       ...('offerMove' in value && value.offerMove === true ? { offerMove: true } : {})
+    }
+  }
+}
+
+// Why alone: an unknown note from a newer host drops without hiding that the host is managed.
+function admitSshManagedServerUpdateNote(value: unknown): { update?: SshManagedServerUpdateNote } {
+  if (!value || typeof value !== 'object' || !('state' in value)) {
+    return {}
+  }
+  const state = SSH_MANAGED_SERVER_UPDATE_STATES.find((entry) => entry === value.state)
+  if (!state) {
+    return {}
+  }
+  const detail = 'detail' in value && typeof value.detail === 'string' ? value.detail : ''
+  return {
+    update: {
+      state,
+      ...(detail
+        ? { detail: clampUtf8TextPrefix(detail, SSH_CONNECTION_ERROR_MAX_UTF8_BYTES) }
+        : {})
     }
   }
 }

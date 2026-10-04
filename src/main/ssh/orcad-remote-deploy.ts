@@ -48,6 +48,8 @@ export type OrcadDeployOptions = {
    */
   census: OrcadTerminalCensus
   force?: boolean
+  /** The Orca app version activating, recorded so an older client never downgrades the host. */
+  appVersion?: string
   readinessTimeoutMs?: number
   now?: () => Date
   sleep?: (ms: number) => Promise<void>
